@@ -18,21 +18,32 @@ logger = logging.getLogger(__name__)
 
 class LocalCAApp(BaseNodeApp):
     def __init__(self, root, node_id, default_port, rca_default_host="127.0.0.1", rca_default_port=10000):
-        super().__init__(root, node_id, default_port, config_file_name="lca_config.json")
-        self.root.title(f"Локальный УЦ (LCA): {self.node_id}")
-
+        # 1. Инициализация атрибутов, не зависящих от GUI или super()
         self.rca_host = rca_default_host
         self.rca_port = rca_default_port
         self.rca_certificate = None # Сертификат RCA, полученный от него
 
-        # Дополнительные элементы GUI для LCA
-        self.create_lca_specific_gui()
+        # 2. Вызов super().__init__()
+        # Он вызовет BaseNodeApp.setup_gui() и LocalCAApp.load_configuration() (переопределенный)
+        super().__init__(root, node_id, default_port, config_file_name="lca_config.json")
+        self.root.title(f"Локальный УЦ (LCA): {self.node_id}")
 
-        # Загружаем сертификаты клиентов, если они есть
-        self.load_issued_client_certificates()
+        # 3. Создание специфичных для LCA GUI элементов
+        self.create_lca_specific_gui() # Создает self.rca_ip_entry и т.д.
+
+        # 4. Обновление GUI полей rca_host и rca_port значениями,
+        # которые могли быть загружены в self.rca_host/port из LocalCAApp.load_configuration()
+        if hasattr(self, 'rca_ip_entry'): # Проверка на всякий случай
+            self.rca_ip_entry.delete(0, tk.END)
+            self.rca_ip_entry.insert(0, self.rca_host)
+        if hasattr(self, 'rca_port_entry'):
+            self.rca_port_entry.delete(0, tk.END)
+            self.rca_port_entry.insert(0, str(self.rca_port))
+
+        # 5. Загрузка и отображение выданных сертификатов (теперь GUI полностью готово)
+        self.load_issued_lca_certificates()
         
-        # При загрузке конфигурации, если есть p и g, но нет своего сертификата,
-        # это может означать, что нужно запросить сертификат у RCA
+        # 6. Финальные проверки и логирование
         if self.p and self.g and not self.own_certificate:
              logger.warning(f"LCA '{self.node_id}' имеет p и g, но нет собственного сертификата. Запросите у RCA.")
         elif not self.p or not self.g:
@@ -333,23 +344,20 @@ class LocalCAApp(BaseNodeApp):
                 with open(self.config_file_path, 'r', encoding='utf-8') as f:
                     config_data = json.load(f)
                 
-                self.rca_host = config_data.get("rca_host", self.rca_host) # self.rca_host уже имеет default
-                self.rca_port = config_data.get("rca_port", self.rca_port) # self.rca_port уже имеет default
-                self.rca_ip_entry.delete(0, tk.END)
-                self.rca_ip_entry.insert(0, self.rca_host)
-                self.rca_port_entry.delete(0, tk.END)
-                self.rca_port_entry.insert(0, str(self.rca_port))
+                # self.rca_host и self.rca_port уже имеют значения по умолчанию или из аргументов конструктора
+                self.rca_host = config_data.get("rca_host", self.rca_host) 
+                self.rca_port = config_data.get("rca_port", self.rca_port)
+                # Обновление GUI полей rca_ip_entry и rca_port_entry перенесено в __init__
 
                 rca_cert_data = config_data.get("rca_certificate")
                 if rca_cert_data:
                     self.rca_certificate = Certificate.from_dict(rca_cert_data)
-                    self.certificate_store.add_certificate(self.rca_certificate, save_to_file=False) # Уже должен быть в файлах, если есть
+                    self.certificate_store.add_certificate(self.rca_certificate, save_to_file=False) 
                     logger.info(f"Сертификат RCA загружен из конфигурации LCA: {self.rca_certificate.subject_id}")
                 
-        except Exception as e: # Ловим ошибки специфичные для этой части загрузки
+        except Exception as e: 
             logger.error(f"Ошибка при загрузке специфичной для LCA конфигурации: {e}")
         
-        # Обновляем отображение ключей и сертификата (включая p,g которые могли прийти из super().load_configuration())
         self.update_key_displays()
 
 

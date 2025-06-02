@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import scrolledtext, messagebox, ttk, simpledialog
 import threading
 import logging
+import queue # <--- Добавлен импорт queue
 import os # Для работы с путями к файлам конфигурации
 import json # Добавлен импорт json, он используется в save/load_configuration
 import datetime # Добавлен импорт datetime, он используется для lcg_seed_counter
@@ -28,17 +29,14 @@ if not logger.hasHandlers(): # Предотвращаем дублировани
 
 class GuiHandler(logging.Handler):
     """ Пользовательский обработчик логирования для вывода сообщений в Tkinter Text widget. """
-    def __init__(self, text_widget):
+    def __init__(self, log_queue: queue.Queue): # Принимает очередь
         super().__init__()
-        self.text_widget = text_widget
-        self.text_widget.config(state=tk.DISABLED) # Изначально только для чтения
+        self.log_queue = log_queue
 
     def emit(self, record):
         msg = self.format(record)
-        self.text_widget.config(state=tk.NORMAL)
-        self.text_widget.insert(tk.END, msg + "\n")
-        self.text_widget.see(tk.END) # Автопрокрутка
-        self.text_widget.config(state=tk.DISABLED)
+        self.log_queue.put(msg) # Кладем сообщение в очередь
+
 
 
 class BaseNodeApp:
@@ -46,47 +44,63 @@ class BaseNodeApp:
         self.root = root
         self.node_id = node_id
         self.default_port = default_port
-        self.port = default_port # Может быть изменено из конфигурации или GUI
+        self.port = default_port
         
         self.config_file_path = os.path.join(os.path.dirname(__file__) or ".", "configs", f"{self.node_id.replace('@','_at_')}_{config_file_name}")
         os.makedirs(os.path.dirname(self.config_file_path), exist_ok=True)
 
-
-        # Криптографические параметры и ключи
         self.p = None
         self.g = None
-        self.lcg_seed_counter = int(datetime.datetime.now().timestamp() * 1000) # Базовый сид
-        self.lcg = LCG(self.lcg_seed_counter) # Основной LCG для узла
+        self.lcg_seed_counter = int(datetime.datetime.now().timestamp() * 1000)
+        self.lcg = LCG(self.lcg_seed_counter)
 
         self.key_pair_encryption = {"private_xe": None, "public_ye": None}
         self.key_pair_signature = {"private_xs": None, "public_ys": None}
 
-        # Сертификаты
-        self.own_certificate = None # Собственный сертификат узла
-        # Хранилище для сертификатов других узлов (RCA, LCA, другие клиенты)
-        # Директория для хранения будет специфична для каждого узла
+        self.own_certificate = None
         cert_store_dir = os.path.join(os.path.dirname(__file__) or ".", "node_data", self.node_id.replace('@','_at_'), "certs")
         self.certificate_store = CertificateStore(storage_dir=cert_store_dir)
 
         self.server_socket = None
         self.server_thread = None
         self.is_server_running = False
+        self.app_exiting = False # Флаг для корректного завершения
 
-        self.setup_gui()
-        self.load_configuration() # Загрузка p, g, ключей, порта и т.д.
+        self.log_queue = queue.Queue() # Очередь для логов
 
-        # Добавляем GUI-обработчик в логгер всего модуля
-        # Это позволит всем логам из elgamal_utils, certificate_manager и т.д. (если они используют logger = logging.getLogger(__name__))
-        # также попадать в GUI, если их уровень DEBUG или выше.
-        # Однако, лучше настроить это более гранулярно. Пока для простоты так.
-        gui_log_handler = GuiHandler(self.log_text)
-        gui_log_handler.setLevel(logging.DEBUG) # Уровень для GUI
+        self.setup_gui() # Создание GUI, включая self.log_text
+        self.load_configuration()
+
+        # Настройка GUI-логгера
+        gui_log_handler = GuiHandler(self.log_queue) # Передаем очередь
+        gui_log_handler.setLevel(logging.DEBUG)
         gui_log_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         logging.getLogger().addHandler(gui_log_handler) # Добавляем к корневому логгеру
         
         logger.info(f"Приложение '{self.node_id}' инициализировано.")
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # Запускаем периодическую проверку очереди логов
+        self.process_log_queue()
+
+    def process_log_queue(self):
+        """ Извлекает сообщения из очереди логов и отображает их в GUI. """
+        try:
+            while True: # Обрабатываем все сообщения в очереди на данный момент
+                log_entry = self.log_queue.get_nowait()
+                # Проверяем, существует ли виджет и не уничтожен ли root
+                if hasattr(self, 'log_text') and self.log_text.winfo_exists():
+                    self.log_text.config(state=tk.NORMAL)
+                    self.log_text.insert(tk.END, log_entry + "\n")
+                    self.log_text.see(tk.END)
+                    self.log_text.config(state=tk.DISABLED)
+        except queue.Empty:
+            pass # Очередь пуста, ничего не делаем
+        finally:
+            # Перезапускаем таймер для следующей проверки, если приложение не завершается
+            if not self.app_exiting and hasattr(self.root, 'tk') and self.root.winfo_exists():
+                 self.root.after(100, self.process_log_queue) # Проверять каждые 100 мс
 
 
     def get_next_lcg_seed(self):
@@ -98,35 +112,28 @@ class BaseNodeApp:
         self.root.title(f"Узел PKI: {self.node_id}")
         self.root.geometry("800x600")
 
-        # --- Основной контейнер ---
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # --- Панель управления (будет заполнена в дочерних классах) ---
         self.control_panel = ttk.Labelframe(main_frame, text="Управление узлом")
         self.control_panel.pack(fill=tk.X, pady=5)
-        # Пример кнопки, которая может быть общей
         ttk.Button(self.control_panel, text="Сохранить конфигурацию", command=self.save_configuration).pack(side=tk.LEFT, padx=5)
         ttk.Button(self.control_panel, text="Запустить сервер", command=self.start_server_action).pack(side=tk.LEFT, padx=5)
         ttk.Button(self.control_panel, text="Остановить сервер", command=self.stop_server_action).pack(side=tk.LEFT, padx=5)
 
-
-        # --- Вкладки для разной информации ---
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        # Вкладка "Ключи и Сертификат"
         self.keys_certs_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.keys_certs_tab, text="Ключи и Сертификат")
         self.create_keys_certs_tab_widgets(self.keys_certs_tab)
         
-        # Вкладка "Логи"
         log_frame = ttk.Frame(self.notebook)
         self.notebook.add(log_frame, text="Логи операций")
+        # Изначально state=tk.DISABLED, чтобы GuiHandler не пытался писать до инициализации очереди
         self.log_text = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, height=10, state=tk.DISABLED)
         self.log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # --- Строка состояния ---
         self.status_bar = ttk.Label(main_frame, text=f"Готов. Порт: {self.port}", relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(fill=tk.X, side=tk.BOTTOM, ipady=2)
 
@@ -386,17 +393,14 @@ class BaseNodeApp:
         messagebox.showinfo("Сервер", "Сервер успешно остановлен.", parent=self.root)
 
     def on_closing(self):
-        """ Обработчик закрытия окна приложения. """
         logger.info("Запрос на закрытие приложения...")
         if self.is_server_running:
             if messagebox.askyesno("Выход", "Сервер активен. Остановить сервер и выйти?", parent=self.root):
                 self.stop_server_action()
             else:
-                return # Отмена закрытия
+                return
         
-        # Здесь можно добавить сохранение конфигурации перед выходом, если есть несохраненные изменения
-        # self.save_configuration() 
-        
+        self.app_exiting = True # Устанавливаем флаг перед destroy
         self.root.destroy()
         logger.info("Приложение закрыто.")
 
