@@ -1,19 +1,43 @@
 {
-  "node_id": "LCA1",
-  "port": 10001,
-  "p": 170141183460469231731687303717659846387,
-  "g": 2,
-  "lcg_seed_counter": 1748889995562,
-  "key_pair_encryption": {
-    "private_xe": 1923900189,
-    "public_ye": 3009022614477511582
-  },
-  "key_pair_signature": {
-    "private_xs": 820384944,
-    "public_ys": 6273859204142324800
-  },
-  "own_certificate": null,
-  "rca_host": "127.0.0.1",
-  "rca_port": 10000,
-  "rca_certificate": null
+    "node_id": "LCA1",
+    "port": 10001,
+    "p": 170141183460469231731687303717659846387,
+    "g": 2,
+    "lcg_seed_counter": 1748889995562,
+    "key_pair_encryption": {
+        "private_xe": 1923900189,
+        "public_ye": 3009022614477511582
+    },
+    "key_pair_signature": {
+        "private_xs": 820384944,
+        "public_ys": 6273859204142324800
+    },
+    "own_certificate": {
+        "subject_id": "LCA1",
+        "issuer_id": "RootCA",
+        "subject_public_key_ye": 3009022614477511582,
+        "subject_public_key_ys": 6273859204142324800,
+        "p": 170141183460469231731687303717659846387,
+        "g": 2,
+        "valid_from": "2025-06-02T20:15:22Z",
+        "valid_to": "2026-06-02T20:15:22Z",
+        "serial_number": 1686792045,
+        "signature_r": 131579222460107025491612898261868931356,
+        "signature_s": 53933412104304722719952559057521641628
+    },
+    "rca_host": "127.0.0.1",
+    "rca_port": 10000,
+    "rca_certificate": {
+        "subject_id": "RootCA",
+        "issuer_id": "RootCA",
+        "subject_public_key_ye": 75928550983375741089159738426768853729,
+        "subject_public_key_ys": 75928550983375741089159738426768853729,
+        "p": 170141183460469231731687303717659846387,
+        "g": 2,
+        "valid_from": "2025-06-02T18:21:09Z",
+        "valid_to": "2026-06-02T18:21:09Z",
+        "serial_number": 2176528479,
+        "signature_r": 103679241495932260452407793358593374243,
+        "signature_s": 45152710578172371620372513497236433689
+    }
 }

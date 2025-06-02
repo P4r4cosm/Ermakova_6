@@ -278,9 +278,7 @@ class LocalCAApp(BaseNodeApp):
 
                 logger.info(f"Получен запрос на сертификат от клиента: {client_id}")
 
-                validity_days = int(simpledialog.askstring("Срок действия", 
-                                                           f"Введите срок действия сертификата для {client_id} в днях:", 
-                                                           initialvalue="180", parent=self.root) or 180)
+                validity_days = 365
                 
                 client_cert = Certificate(
                     subject_id=client_id,
