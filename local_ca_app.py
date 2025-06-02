@@ -41,7 +41,7 @@ class LocalCAApp(BaseNodeApp):
             self.rca_port_entry.insert(0, str(self.rca_port))
 
         # 5. Загрузка и отображение выданных сертификатов (теперь GUI полностью готово)
-        self.load_issued_lca_certificates()
+        self.load_issued_client_certificates()
         
         # 6. Финальные проверки и логирование
         if self.p and self.g and not self.own_certificate:
