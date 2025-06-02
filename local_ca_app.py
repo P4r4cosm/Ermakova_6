@@ -293,16 +293,19 @@ class LocalCAApp(BaseNodeApp):
                 
                 self.certificate_store.add_certificate(client_cert, save_to_file=True)
                 self.load_issued_client_certificates() # Обновляем GUI
-
-                logger.info(f"Сертификат для клиента '{client_id}' выдан и подписан LCA '{self.node_id}'.")
                 
-                # Отправляем клиенту его сертификат и сертификат самого LCA
-                return {
+                # Отправляем клиенту его сертификат, сертификат самого LCA и сертификат RCA (если есть)
+                response_payload = {
                     "status": "ok",
                     "message": "Client certificate issued.",
                     "client_certificate": client_cert.to_dict(),
-                    "lca_certificate": self.own_certificate.to_dict() 
+                    "lca_certificate": self.own_certificate.to_dict()
                 }
+                if self.rca_certificate: # Добавляем сертификат RCA, если он есть у LCA
+                    response_payload["rca_certificate"] = self.rca_certificate.to_dict()
+                
+                logger.info(f"Сертификат для клиента '{client_id}' выдан и подписан LCA '{self.node_id}'. Отправляем всю цепочку.")
+                return response_payload
 
             except KeyError as e:
                 logger.error(f"Неполный запрос на сертификат клиента от {addr}: отсутствует {e}")
