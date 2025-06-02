@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 import logging
 import datetime # Для работы с датами в сертификатах
-
+import json
 from base_node_app import BaseNodeApp
 from elgamal_utils import PrimeManager, ElGamalCrypto # LCG уже в BaseNodeApp
 from certificate_manager import Certificate # CertificateStore уже в BaseNodeApp
@@ -203,9 +203,7 @@ class RootCAApp(BaseNodeApp):
 
                 # Создаем сертификат для LCA
                 # Срок действия можно сделать настраиваемым
-                validity_days = int(simpledialog.askstring("Срок действия", 
-                                                           f"Введите срок действия сертификата для {lca_id} в днях:", 
-                                                           initialvalue="365", parent=self.root) or 365)
+                validity_days = 365
 
                 lca_cert = Certificate(
                     subject_id=lca_id,

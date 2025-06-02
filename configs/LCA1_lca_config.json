@@ -1,0 +1,19 @@
+{
+  "node_id": "LCA1",
+  "port": 10001,
+  "p": 170141183460469231731687303717659846387,
+  "g": 2,
+  "lcg_seed_counter": 1748889995562,
+  "key_pair_encryption": {
+    "private_xe": 1923900189,
+    "public_ye": 3009022614477511582
+  },
+  "key_pair_signature": {
+    "private_xs": 820384944,
+    "public_ys": 6273859204142324800
+  },
+  "own_certificate": null,
+  "rca_host": "127.0.0.1",
+  "rca_port": 10000,
+  "rca_certificate": null
+}

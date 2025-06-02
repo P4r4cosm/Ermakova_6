@@ -5,9 +5,10 @@ from tkinter import ttk, messagebox, simpledialog
 import logging
 import datetime # Для работы с датами в сертификатах
 import json # Для сериализации/десериализации
+import os
 
 from base_node_app import BaseNodeApp
-from elgamal_utils import ElGamalCrypto # LCG, PrimeManager уже в BaseNodeApp
+from elgamal_utils import ElGamalCrypto, PrimeManager # LCG, PrimeManager уже в BaseNodeApp
 from certificate_manager import Certificate # CertificateStore уже в BaseNodeApp
 from network_utils import connect_to_server, send_json_message, receive_json_message, \
                           ConnectionClosedError, MessageFormatError, NetworkError
