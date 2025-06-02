@@ -87,20 +87,21 @@ class BaseNodeApp:
     def process_log_queue(self):
         """ Извлекает сообщения из очереди логов и отображает их в GUI. """
         try:
-            while True: # Обрабатываем все сообщения в очереди на данный момент
+            while True: 
                 log_entry = self.log_queue.get_nowait()
-                # Проверяем, существует ли виджет и не уничтожен ли root
-                if hasattr(self, 'log_text') and self.log_text.winfo_exists():
+                # Проверяем, существует ли виджет и не уничтожен ли root (дополнительная защита)
+                if hasattr(self, 'log_text') and self.log_text.winfo_exists() and \
+                   hasattr(self.root, 'tk') and self.root.winfo_exists(): # Добавил проверку self.root.winfo_exists()
                     self.log_text.config(state=tk.NORMAL)
                     self.log_text.insert(tk.END, log_entry + "\n")
                     self.log_text.see(tk.END)
                     self.log_text.config(state=tk.DISABLED)
         except queue.Empty:
-            pass # Очередь пуста, ничего не делаем
+            pass 
         finally:
-            # Перезапускаем таймер для следующей проверки, если приложение не завершается
-            if not self.app_exiting and hasattr(self.root, 'tk') and self.root.winfo_exists():
-                 self.root.after(100, self.process_log_queue) # Проверять каждые 100 мс
+            # Перезапускаем таймер для следующей проверки, только если приложение НЕ завершается
+            if not self.app_exiting and hasattr(self.root, 'tk') and self.root.winfo_exists(): # Проверяем self.app_exiting
+                 self.root.after(100, self.process_log_queue)
 
 
     def get_next_lcg_seed(self):
@@ -393,14 +394,24 @@ class BaseNodeApp:
         messagebox.showinfo("Сервер", "Сервер успешно остановлен.", parent=self.root)
 
     def on_closing(self):
+        """ Обработчик закрытия окна приложения. """
         logger.info("Запрос на закрытие приложения...")
         if self.is_server_running:
             if messagebox.askyesno("Выход", "Сервер активен. Остановить сервер и выйти?", parent=self.root):
                 self.stop_server_action()
             else:
-                return
+                return 
         
-        self.app_exiting = True # Устанавливаем флаг перед destroy
+        self.app_exiting = True # Устанавливаем флаг ПЕРЕД destroy
+        if hasattr(self, 'server_socket') and self.server_socket: # Убедимся, что сокет существует перед закрытием
+            try:
+                if self.is_server_running: # Если сервер все еще помечен как работающий, но не был остановлен
+                    self.stop_server_action() # Попытка корректной остановки
+                elif self.server_socket.fileno() != -1: # Если сокет не был закрыт
+                    self.server_socket.close()
+            except Exception as e_sock_close:
+                logger.error(f"Ошибка при закрытии серверного сокета в on_closing: {e_sock_close}")
+
         self.root.destroy()
         logger.info("Приложение закрыто.")
 

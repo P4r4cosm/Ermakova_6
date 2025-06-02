@@ -6,6 +6,7 @@ import logging
 import datetime # Для работы с датами в сертификатах
 import json # Для сериализации/десериализации
 import os
+import socket
 
 from base_node_app import BaseNodeApp
 from elgamal_utils import ElGamalCrypto, PrimeManager # LCG, PrimeManager уже в BaseNodeApp
@@ -55,6 +56,7 @@ class LocalCAApp(BaseNodeApp):
         lca_panel = ttk.Labelframe(self.control_panel, text="Действия LCA")
         lca_panel.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=5)
 
+        ttk.Button(lca_panel, text="0. Получить параметры от RCA", command=self.fetch_rca_params_action).pack(side=tk.LEFT, padx=5) # НОВАЯ КНОПКА
         ttk.Button(lca_panel, text="1. Сгенерировать ключи LCA", command=self.generate_lca_keys_action).pack(side=tk.LEFT, padx=5)
         
         rca_conn_frame = ttk.Frame(lca_panel)
@@ -68,7 +70,7 @@ class LocalCAApp(BaseNodeApp):
         self.rca_port_entry.grid(row=1, column=1, sticky=tk.W)
         self.rca_port_entry.insert(0, str(self.rca_port))
 
-        ttk.Button(lca_panel, text="2. Запросить сертификат у RCA", command=self.request_certificate_from_rca_action).pack(side=tk.LEFT, padx=5)
+        ttk.Button(lca_panel, text="2. Запросить сертификат LCA у RCA", command=self.request_lca_certificate_from_rca_action).pack(side=tk.LEFT, padx=5) # Переименовал для ясности
         ttk.Button(lca_panel, text="Просмотреть выданные сертификаты клиентов", command=self.view_issued_client_certs_action).pack(side=tk.LEFT, padx=5)
 
         # Вкладка для отображения выданных сертификатов клиентов
@@ -86,7 +88,89 @@ class LocalCAApp(BaseNodeApp):
 
         self.client_cert_details_text = tk.Text(self.issued_client_certs_tab, wrap=tk.WORD, height=10, width=60, state=tk.DISABLED)
         self.client_cert_details_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+    def fetch_rca_params_action(self): # НОВЫЙ МЕТОД
+        if self.p and self.g and self.rca_certificate:
+            if not messagebox.askyesno("Подтверждение",
+                                       "Параметры P, G и сертификат RCA уже существуют. Запросить заново?",
+                                       parent=self.root):
+                return
 
+        self.rca_host = self.rca_ip_entry.get()
+        try:
+            self.rca_port = int(self.rca_port_entry.get())
+        except ValueError:
+            messagebox.showerror("Ошибка", "Порт RCA должен быть числом.", parent=self.root)
+            return
+
+        rca_sock = None
+        try:
+            logger.info(f"LCA ({self.node_id}) запрашивает публичную информацию у RCA {self.rca_host}:{self.rca_port}...")
+            rca_sock = connect_to_server(self.rca_host, self.rca_port)
+            if not rca_sock:
+                messagebox.showerror("Ошибка соединения", f"Не удалось подключиться к RCA по адресу {self.rca_host}:{self.rca_port}", parent=self.root)
+                return
+
+            send_json_message(rca_sock, {"command": "get_rca_public_info", "payload": {}}) # Используем новую команду
+            logger.info(f"LCA ({self.node_id}) отправил запрос get_rca_public_info к RCA.")
+
+            response = receive_json_message(rca_sock, timeout=30.0)
+            if not response:
+                messagebox.showerror("Ошибка ответа", "RCA не ответил или ответ некорректен на get_rca_public_info.", parent=self.root)
+                return
+            logger.info(f"LCA ({self.node_id}) получил ответ от RCA на get_rca_public_info: {str(response)[:200]}...")
+
+            if response.get("status") == "ok":
+                rca_cert_data = response.get("rca_certificate")
+                if not rca_cert_data:
+                    messagebox.showerror("Ошибка ответа RCA", "RCA не прислал свой сертификат в ответе на get_rca_public_info.", parent=self.root)
+                    return
+                
+                try:
+                    self.rca_certificate = Certificate.from_dict(rca_cert_data)
+                    self.certificate_store.add_certificate(self.rca_certificate, save_to_file=True)
+                except Exception as e_parse:
+                    logger.error(f"Ошибка парсинга сертификата RCA: {e_parse}")
+                    messagebox.showerror("Ошибка парсинга", f"Не удалось обработать сертификат RCA: {e_parse}", parent=self.root)
+                    return
+
+                new_p = self.rca_certificate.p
+                new_g = self.rca_certificate.g
+
+                if self.p != new_p or self.g != new_g or not self.key_pair_signature["public_ys"]:
+                    logger.info(f"LCA ({self.node_id}) установил/обновил p и g от RCA: p={new_p}, g={new_g}.")
+                    self.p = new_p
+                    self.g = new_g
+                    # Сбрасываем ключи и собственный сертификат, т.к. p,g изменились или ключи не были для них
+                    if self.key_pair_signature["public_ys"] or self.own_certificate:
+                         logger.warning("Параметры p,g изменились или были установлены. Существующие ключи LCA и сертификат (если были) сброшены.")
+                         self.key_pair_encryption = {"private_xe": None, "public_ye": None}
+                         self.key_pair_signature = {"private_xs": None, "public_ys": None}
+                         self.own_certificate = None
+                    self.update_key_displays()
+                    messagebox.showinfo("Параметры P,G получены",
+                                        f"От RCA получены параметры: P={self.p}, G={self.g} и сертификат RCA.\n"
+                                        "Теперь сгенерируйте ключи LCA (кнопка 1).",
+                                        parent=self.root)
+                else:
+                    logger.info(f"LCA ({self.node_id}) подтвердил p и g от RCA: p={self.p}, g={self.g}. Изменений нет, ключи существуют.")
+                    messagebox.showinfo("Параметры P,G актуальны",
+                                        f"Параметры P={self.p}, G={self.g} и сертификат RCA актуальны.",
+                                        parent=self.root)
+            else:
+                error_msg = response.get("message", "Неизвестная ошибка от RCA при получении public_info.")
+                messagebox.showerror("Ошибка от RCA", f"RCA вернул ошибку: {error_msg}", parent=self.root)
+
+        except (NetworkError, ConnectionClosedError, MessageFormatError, socket.timeout) as e:
+            logger.error(f"Сетевая ошибка при запросе public_info у RCA: {e}")
+            messagebox.showerror("Сетевая ошибка", f"Ошибка при обмене данными с RCA: {e}", parent=self.root)
+        except Exception as e:
+            logger.error(f"Непредвиденная ошибка при запросе public_info у RCA: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            messagebox.showerror("Ошибка", f"Произошла ошибка: {e}", parent=self.root)
+        finally:
+            if rca_sock:
+                rca_sock.close()
 
     def generate_lca_keys_action(self):
         if not self.p or not self.g:
@@ -126,9 +210,12 @@ class LocalCAApp(BaseNodeApp):
             logger.error(f"Ошибка при генерации ключей LCA: {e}")
             messagebox.showerror("Ошибка", f"Не удалось сгенерировать ключи LCA: {e}", parent=self.root)
 
-    def request_certificate_from_rca_action(self):
+    def request_lca_certificate_from_rca_action(self): # Переименовал request_certificate_from_rca_action
+        if not self.p or not self.g:
+            messagebox.showerror("Ошибка", "Параметры P и G не установлены. Сначала получите их от RCA (кнопка 0).", parent=self.root)
+            return
         if not self.key_pair_signature["public_ys"] or not self.key_pair_encryption["public_ye"]:
-            messagebox.showerror("Ошибка", "Сначала сгенерируйте ключи LCA.", parent=self.root)
+            messagebox.showerror("Ошибка", "Ключи LCA не сгенерированы. Сначала сгенерируйте их (кнопка 1).", parent=self.root)
             return
 
         self.rca_host = self.rca_ip_entry.get()
@@ -138,71 +225,106 @@ class LocalCAApp(BaseNodeApp):
             messagebox.showerror("Ошибка", "Порт RCA должен быть числом.", parent=self.root)
             return
 
-        request_payload = {
+        request_payload = { # Теперь мы уверены, что p,g есть и ключи есть
             "lca_id": self.node_id,
             "lca_public_key_ye": self.key_pair_encryption["public_ye"],
             "lca_public_key_ys": self.key_pair_signature["public_ys"],
-            # LCA отправляет свои p и g (если они есть), RCA должен их проверить
-            # или установить их из ответа RCA.
-            # Если у LCA еще нет p,g, он может отправить None или 0,
-            # а RCA пришлет свои p,g в сертификате.
-            "lca_p": self.p if self.p else 0, 
-            "lca_g": self.g if self.g else 0
+            "lca_p": self.p,
+            "lca_g": self.g
         }
         
         rca_sock = None
         try:
-            logger.info(f"Подключение к RCA {self.rca_host}:{self.rca_port} для запроса сертификата...")
-            rca_sock = connect_to_server(self.rca_host, self.rca_port)
+            logger.info(f"LCA ({self.node_id}) подключается к RCA {self.rca_host}:{self.rca_port} для запроса своего сертификата...")
+            rca_sock = connect_to_server(self.rca_host, self.rca_port) # <--- ИСПРАВЛЕНИЕ: Добавлено подключение
             if not rca_sock:
                 messagebox.showerror("Ошибка соединения", f"Не удалось подключиться к RCA по адресу {self.rca_host}:{self.rca_port}", parent=self.root)
+                logger.error(f"LCA ({self.node_id}) не смог подключиться к RCA {self.rca_host}:{self.rca_port} для запроса своего сертификата.")
                 return
 
             send_json_message(rca_sock, {"command": "request_lca_certificate", "payload": request_payload})
-            logger.info("Запрос на сертификат LCA отправлен RCA.")
+            logger.info(f"LCA ({self.node_id}) отправил запрос request_lca_certificate к RCA.")
 
             response = receive_json_message(rca_sock, timeout=30.0)
-            if not response:
-                messagebox.showerror("Ошибка ответа", "RCA не ответил или ответ некорректен.", parent=self.root)
+            if not response: # <--- ИСПРАВЛЕНИЕ: Обработка случая, если ответ не получен
+                messagebox.showerror("Ошибка ответа", "RCA не ответил или ответ некорректен на request_lca_certificate.", parent=self.root)
+                logger.error(f"LCA ({self.node_id}) не получил ответ от RCA на request_lca_certificate.")
                 return
-
-            logger.info(f"Получен ответ от RCA: {str(response)[:200]}...")
+            logger.info(f"LCA ({self.node_id}) получил ответ от RCA на request_lca_certificate: {str(response)[:200]}...")
 
             if response.get("status") == "ok":
                 lca_cert_data = response.get("lca_certificate")
-                rca_cert_data = response.get("rca_certificate")
+                rca_cert_data_resp = response.get("rca_certificate") # RCA все равно присылает свой сертификат
 
-                if not lca_cert_data or not rca_cert_data:
-                    messagebox.showerror("Ошибка ответа", "Ответ RCA не содержит необходимых сертификатов.", parent=self.root)
+                if not lca_cert_data or not rca_cert_data_resp:
+                    messagebox.showerror("Ошибка ответа RCA", "RCA не прислал сертификат LCA или свой сертификат.", parent=self.root)
+                    return
+
+                # Обновляем/проверяем сертификат RCA
+                # Сначала парсим, потом сравниваем, чтобы избежать ошибки если rca_cert_data_resp невалидный
+                try:
+                    parsed_rca_cert_resp = Certificate.from_dict(rca_cert_data_resp)
+                    if not self.rca_certificate or self.rca_certificate.serial_number != parsed_rca_cert_resp.serial_number :
+                        self.rca_certificate = parsed_rca_cert_resp
+                        self.certificate_store.add_certificate(self.rca_certificate, save_to_file=True)
+                        logger.info(f"Сертификат RCA обновлен/подтвержден от RCA: {self.rca_certificate.subject_id}")
+                except Exception as e_parse_rca_resp:
+                    logger.error(f"Ошибка парсинга сертификата RCA из ответа: {e_parse_rca_resp}")
+                    messagebox.showerror("Ошибка парсинга", f"Не удалось обработать сертификат RCA из ответа: {e_parse_rca_resp}", parent=self.root)
+                    return
+
+
+                # Обрабатываем собственный сертификат LCA
+                try:
+                    temp_lca_cert = Certificate.from_dict(lca_cert_data)
+                except Exception as e_parse:
+                    logger.error(f"Ошибка парсинга сертификата LCA от RCA: {e_parse}")
+                    messagebox.showerror("Ошибка парсинга", f"Не удалось обработать сертификат LCA: {e_parse}", parent=self.root)
+                    return
+
+                if temp_lca_cert.p != self.p or temp_lca_cert.g != self.g:
+                    logger.error(f"RCA выдал сертификат LCA с p/g ({temp_lca_cert.p},{temp_lca_cert.g}), отличными от текущих p/g ({self.p},{self.g})!")
+                    messagebox.showerror("Ошибка параметров", "RCA выдал сертификат с неверными p/g!", parent=self.root)
+                    return
+                if temp_lca_cert.subject_public_key_ys != self.key_pair_signature["public_ys"]:
+                    logger.error(f"RCA выдал сертификат LCA на YS ({temp_lca_cert.subject_public_key_ys}), отличный от текущего YS LCA ({self.key_pair_signature['public_ys']})!")
+                    messagebox.showerror("Ошибка ключа", "RCA выдал сертификат на неверный публичный ключ LCA!", parent=self.root)
                     return
                 
-                # Парсим и сохраняем сертификат RCA
-                self.rca_certificate = Certificate.from_dict(rca_cert_data)
-                self.certificate_store.add_certificate(self.rca_certificate, save_to_file=True) # Сохраняем серт RCA
-                logger.info(f"Сертификат RCA получен и сохранен: {self.rca_certificate.subject_id}")
-
-                # Парсим и сохраняем собственный сертификат LCA
-                self.own_certificate = Certificate.from_dict(lca_cert_data)
-                
-                # Важно: Устанавливаем p и g из полученного сертификата (они должны быть от RCA)
-                self.p = self.own_certificate.p
-                self.g = self.own_certificate.g
-                logger.info(f"Установлены p={self.p}, g={self.g} из сертификата, выданного RCA.")
-
-                # Проверяем подпись полученного сертификата LCA, используя публичный ключ RCA (из сертификата RCA)
+                self.own_certificate = temp_lca_cert
                 if self.own_certificate.verify_signature(self.rca_certificate.subject_public_key_ys):
-                    self.certificate_store.add_certificate(self.own_certificate, save_to_file=True) # Сохраняем свой серт
-                    logger.info(f"Сертификат для LCA '{self.node_id}' получен, проверен и сохранен.")
+                    self.certificate_store.add_certificate(self.own_certificate, save_to_file=True)
+                    logger.info(f"Сертификат для LCA '{self.node_id}' получен от RCA, проверен и сохранен.")
                     self.update_key_displays()
-                    messagebox.showinfo("Успех", "Сертификат от RCA успешно получен и проверен.", parent=self.root)
+                    messagebox.showinfo("Успех", "Сертификат LCA от RCA успешно получен и проверен.", parent=self.root)
                 else:
-                    self.own_certificate = None # Сертификат невалидный
-                    logger.error("Полученный от RCA сертификат LCA не прошел проверку подписи!")
-                    messagebox.showerror("Ошибка проверки", "Подпись полученного сертификата LCA недействительна!", parent=self.root)
-                
+                    self.own_certificate = None
+                    logger.error(f"Подпись полученного сертификата LCA от RCA недействительна! Проверьте YS RCA ({self.rca_certificate.subject_public_key_ys}).")
+                    
+                    # Дополнительная отладочная информация
+                    data_to_verify = self.own_certificate.get_data_to_sign_or_verify()
+                    hash_h = ElGamalCrypto.MessageUtils.hash_message_for_elgamal(data_to_verify, self.own_certificate.p - 1)
+                    logger.debug(f"Отладка проверки подписи LCA сертификата:")
+                    logger.debug(f"  Данные для проверки (строка): {data_to_verify[:200]}...")
+                    logger.debug(f"  Хеш H: {hash_h}")
+                    logger.debug(f"  Подпись R: {self.own_certificate.signature_r}, S: {self.own_certificate.signature_s}")
+                    logger.debug(f"  Параметры p: {self.own_certificate.p}, g: {self.own_certificate.g}")
+                    logger.debug(f"  Публичный ключ издателя (RCA YS): {self.rca_certificate.subject_public_key_ys}")
+                    
+                    # Проверка компонентов подписи
+                    p_val = self.own_certificate.p
+                    term1_verify = ElGamalCrypto.ElGamalBaseUtils.custom_pow(self.rca_certificate.subject_public_key_ys, self.own_certificate.signature_r, p_val)
+                    term2_verify = ElGamalCrypto.ElGamalBaseUtils.custom_pow(self.own_certificate.signature_r, self.own_certificate.signature_s, p_val)
+                    left_side_verify = (term1_verify * term2_verify) % p_val
+                    right_side_verify = ElGamalCrypto.ElGamalBaseUtils.custom_pow(self.own_certificate.g, hash_h, p_val)
+                    logger.debug(f"  Проверка: (y^r * r^s) mod p = {left_side_verify}")
+                    logger.debug(f"  Проверка: g^h mod p = {right_side_verify}")
+
+                    messagebox.showerror("Ошибка проверки", "Подпись сертификата LCA, выданного RCA, недействительна!", parent=self.root)
+            elif response.get("status") == "rca_params_provided": # Этот статус здесь не ожидается
+                 messagebox.showwarning("Неожиданный ответ RCA", "RCA ответил 'rca_params_provided', хотя ожидался сертификат LCA. Попробуйте сначала '0. Получить параметры'.", parent=self.root)
             else:
-                error_msg = response.get("message", "Неизвестная ошибка от RCA.")
-                logger.error(f"RCA вернул ошибку: {error_msg}")
+                error_msg = response.get("message", "Неизвестная ошибка от RCA при запросе сертификата LCA.")
                 messagebox.showerror("Ошибка от RCA", f"RCA вернул ошибку: {error_msg}", parent=self.root)
 
         except (NetworkError, ConnectionClosedError, MessageFormatError, socket.timeout) as e:
@@ -289,6 +411,10 @@ class LocalCAApp(BaseNodeApp):
                     g=self.g,
                     valid_to_dt = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=validity_days)
                 )
+
+                logger.debug(f"LCA ({self.node_id}) подписывает сертификат для {client_id} своим ключом private_xs={self.key_pair_signature['private_xs']}. Публичный ключ YS LCA: {self.key_pair_signature['public_ys']}")
+                k_seed_for_client_cert = self.get_next_lcg_seed() # Получаем сид
+                logger.debug(f"LCA ({self.node_id}) использует сид {k_seed_for_client_cert} для k_sig при подписи сертификата клиента.")
                 client_cert.sign(self.key_pair_signature["private_xs"], self.get_next_lcg_seed())
                 
                 self.certificate_store.add_certificate(client_cert, save_to_file=True)
@@ -305,6 +431,9 @@ class LocalCAApp(BaseNodeApp):
                     response_payload["rca_certificate"] = self.rca_certificate.to_dict()
                 
                 logger.info(f"Сертификат для клиента '{client_id}' выдан и подписан LCA '{self.node_id}'. Отправляем всю цепочку.")
+
+                if self.own_certificate.subject_public_key_ys != self.key_pair_signature["public_ys"]:
+                    logger.error(f"КРИТИЧЕСКАЯ ОШИБКА LCA: YS в собственном сертификате LCA ({self.own_certificate.subject_public_key_ys}) НЕ СОВПАДАЕТ с текущим YS LCA ({self.key_pair_signature['public_ys']})!")
                 return response_payload
 
             except KeyError as e:
@@ -330,6 +459,25 @@ class LocalCAApp(BaseNodeApp):
                 logger.warning("Запрошен сертификат RCA, но он отсутствует в кэше LCA.")
                 # Можно добавить логику запроса у RCA, если его нет
                 return {"status": "error", "message": "RCA certificate not cached by this LCA."}
+        
+        elif command == "get_lca_chain": # НОВАЯ КОМАНДА для клиента
+            logger.info(f"LCA ({self.node_id}) получил запрос get_lca_chain от {addr}")
+            if self.own_certificate and self.rca_certificate:
+                return {
+                    "status": "ok",
+                    "lca_certificate": self.own_certificate.to_dict(),
+                    "rca_certificate": self.rca_certificate.to_dict()
+                }
+            elif self.own_certificate: # Если RCA сертификата нет у LCA, отправим хотя бы свой
+                 logger.warning(f"LCA ({self.node_id}) отправляет свой сертификат, но сертификат RCA отсутствует.")
+                 return {
+                    "status": "ok_partial_chain",
+                    "lca_certificate": self.own_certificate.to_dict(),
+                    "rca_certificate": None
+                }
+            else:
+                logger.error(f"LCA ({self.node_id}) не может предоставить get_lca_chain: отсутствует собственный сертификат.")
+                return {"status": "error", "message": "LCA certificate not available."}
 
 
         else:

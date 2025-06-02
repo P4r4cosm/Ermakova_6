@@ -245,7 +245,18 @@ class RootCAApp(BaseNodeApp):
                  return {"status": "ok", "certificate": self.own_certificate.to_dict()}
             else:
                  return {"status": "error", "message": "RCA certificate not available."}
-
+        elif command == "get_rca_public_info": # НОВАЯ КОМАНДА
+            logger.info(f"RCA получил запрос на get_rca_public_info от {addr}")
+            if self.own_certificate and self.p and self.g:
+                return {
+                    "status": "ok",
+                    "message": "RCA public information provided.",
+                    "rca_certificate": self.own_certificate.to_dict() # Содержит p, g, YS_rca
+                }
+            else:
+                logger.error("RCA не может предоставить public_info: отсутствует собственный сертификат, p или g.")
+                return {"status": "error", "message": "RCA not ready to provide public info (missing self-signed certificate, p or g)."}
+        # ... (остальные команды) ...
         else:
             # Если команда не распознана, вызываем метод базового класса
             return super().process_command(command, payload, addr)
