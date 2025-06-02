@@ -1,13 +1,13 @@
 {
     "subject_id": "LCA1",
     "issuer_id": "RootCA",
-    "subject_public_key_ye": 9184170779051542517,
-    "subject_public_key_ys": 156145699199533258,
+    "subject_public_key_ye": 366792837836953510,
+    "subject_public_key_ys": 867536230751260,
     "p": 9223372036865618543,
     "g": 5,
-    "valid_from": "2025-06-02T22:01:15Z",
-    "valid_to": "2026-06-02T22:01:15Z",
-    "serial_number": 2684064912,
+    "valid_from": "2025-06-02T23:43:27Z",
+    "valid_to": "2026-06-02T23:43:27Z",
+    "serial_number": 2999067062,
     "signature_r": 2620463138699431429,
-    "signature_s": 7840414179699333579
+    "signature_s": 4665106787339814883
 }

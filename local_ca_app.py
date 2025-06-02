@@ -392,11 +392,7 @@ class LocalCAApp(BaseNodeApp):
                 client_pub_ye = int(payload["client_public_key_ye"])
                 client_pub_ys = int(payload["client_public_key_ys"])
                 
-                # Проверка, что ID клиента соответствует домену этого LCA (опционально, но логично)
-                # Например, если LCA_ID = "LCA1", то клиент "client1@LCA1" подходит.
-                if not client_id.endswith(f"@{self.node_id}"):
-                     logger.warning(f"Клиент {client_id} запросил сертификат у {self.node_id}, но ID не соответствует домену.")
-                     # Можно вернуть ошибку или просто продолжить, если политика позволяет
+                # ... (проверки ID клиента) ...
 
                 logger.info(f"Получен запрос на сертификат от клиента: {client_id}")
 
@@ -413,12 +409,13 @@ class LocalCAApp(BaseNodeApp):
                 )
 
                 logger.debug(f"LCA ({self.node_id}) подписывает сертификат для {client_id} своим ключом private_xs={self.key_pair_signature['private_xs']}. Публичный ключ YS LCA: {self.key_pair_signature['public_ys']}")
-                k_seed_for_client_cert = self.get_next_lcg_seed() # Получаем сид
+                k_seed_for_client_cert = self.get_next_lcg_seed() 
                 logger.debug(f"LCA ({self.node_id}) использует сид {k_seed_for_client_cert} для k_sig при подписи сертификата клиента.")
-                client_cert.sign(self.key_pair_signature["private_xs"], self.get_next_lcg_seed())
+                # ВАЖНО: передаем k_seed_for_client_cert, а не вызываем get_next_lcg_seed() снова, чтобы сид был тем же, что залогирован
+                client_cert.sign(self.key_pair_signature["private_xs"], k_seed_for_client_cert) 
                 
                 self.certificate_store.add_certificate(client_cert, save_to_file=True)
-                self.load_issued_client_certificates() # Обновляем GUI
+                # self.load_issued_client_certificates() # <--- ИСПРАВЛЕНИЕ: Убираем прямой вызов GUI-обновления из потока
                 
                 # Отправляем клиенту его сертификат, сертификат самого LCA и сертификат RCA (если есть)
                 response_payload = {
@@ -427,7 +424,7 @@ class LocalCAApp(BaseNodeApp):
                     "client_certificate": client_cert.to_dict(),
                     "lca_certificate": self.own_certificate.to_dict()
                 }
-                if self.rca_certificate: # Добавляем сертификат RCA, если он есть у LCA
+                if self.rca_certificate: 
                     response_payload["rca_certificate"] = self.rca_certificate.to_dict()
                 
                 logger.info(f"Сертификат для клиента '{client_id}' выдан и подписан LCA '{self.node_id}'. Отправляем всю цепочку.")
@@ -442,8 +439,8 @@ class LocalCAApp(BaseNodeApp):
             except Exception as e:
                 logger.error(f"Ошибка при обработке запроса на сертификат клиента от {addr}: {e}")
                 import traceback
-                logger.debug(traceback.format_exc())
-                return {"status": "error", "message": f"Error processing client certificate request: {e}"}
+                logger.debug(traceback.format_exc()) # Логируем полный traceback
+                return {"status": "error", "message": f"Error processing client certificate request: {str(e)}"} # Возвращаем текст ошибки
         
         elif command == "get_lca_certificate": # Запрос сертификата самого LCA
             if self.own_certificate:
