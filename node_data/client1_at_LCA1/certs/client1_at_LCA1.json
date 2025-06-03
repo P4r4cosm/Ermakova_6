@@ -1,13 +1,13 @@
 {
     "subject_id": "client1@LCA1",
     "issuer_id": "LCA1",
-    "subject_public_key_ye": 9187147423765544221,
-    "subject_public_key_ys": 8199269401415835373,
+    "subject_public_key_ye": 7248537357187196295,
+    "subject_public_key_ys": 6961593304423764291,
     "p": 9223372037239625299,
     "g": 2,
-    "valid_from": "2025-06-03T13:37:56Z",
-    "valid_to": "2026-06-03T13:37:56Z",
-    "serial_number": 1529469212,
-    "signature_r": 7467007691805297750,
-    "signature_s": 8028072494591590374
+    "valid_from": "2025-06-03T14:00:24Z",
+    "valid_to": "2026-06-03T14:00:24Z",
+    "serial_number": 2041344525,
+    "signature_r": 6224979271427347571,
+    "signature_s": 1667428573558776645
 }

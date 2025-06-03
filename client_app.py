@@ -8,7 +8,7 @@ import datetime
 import json
 
 from base_node_app import BaseNodeApp
-from elgamal_utils import ElGamalCrypto, MessageUtils, PrimeManager
+from elgamal_utils import ElGamalCrypto, MessageUtils, PrimeManager, LCG
 from certificate_manager import Certificate
 from network_utils import connect_to_server, send_json_message, receive_json_message, \
                           ConnectionClosedError, MessageFormatError, NetworkError

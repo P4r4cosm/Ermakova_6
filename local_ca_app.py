@@ -9,7 +9,7 @@ import os
 import socket
 
 from base_node_app import BaseNodeApp
-from elgamal_utils import ElGamalCrypto, PrimeManager # LCG, PrimeManager уже в BaseNodeApp
+from elgamal_utils import ElGamalCrypto, PrimeManager, LCG # LCG, PrimeManager уже в BaseNodeApp
 from certificate_manager import Certificate # CertificateStore уже в BaseNodeApp
 from network_utils import connect_to_server, send_json_message, receive_json_message, \
                           ConnectionClosedError, MessageFormatError, NetworkError
