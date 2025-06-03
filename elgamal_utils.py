@@ -1,7 +1,7 @@
 # START OF FILE: elgamal_utils.py
 
-import math # For PrimeTester, though custom_sqrt is better for large int
-import random # Standard random, only for non-crypto if needed, or LCG base seed
+import math  # For PrimeTester, though custom_sqrt is better for large int
+
 
 class LCG:
     """
@@ -71,14 +71,13 @@ class PrimeManager: # Combining PrimeGenerator and PrimeTester
     def _custom_int_sqrt(n):
         if n < 0: raise ValueError("Cannot compute sqrt of negative number")
         if n == 0: return 0
-        x = int(math.sqrt(n)) # Initial guess using floating point
-        # Refine using Newton's method for integers
-        # Or simpler:
-        if (x+1)*(x+1) <= n :
-             x += 1
-        while x*x > n:
-            x -=1
+        x = n
+        y = (x + 1) // 2
+        while y < x:
+            x = y
+            y = (x + n // x) // 2
         return x
+
 
     @staticmethod
     def _is_prime_trial_division(n):
@@ -151,8 +150,6 @@ class PrimeManager: # Combining PrimeGenerator and PrimeTester
         for _ in range(k):
             if lcg_instance:
                 a = lcg_instance.randint(2, n - 2)
-            else: # Fallback if no LCG provided, for standalone testing
-                a = random.randint(2, n-2)
 
             x = ElGamalBaseUtils.custom_pow(a, d, n)
             if x == 1 or x == n - 1:
@@ -476,7 +473,7 @@ if __name__ == '__main__':
     print("--- Testing ElGamal Utils ---")
 
     # LCG Test
-    lcg_seed = 123456789
+    lcg_seed = id(object()) & 0x7FFFFFFF 
     lcg = LCG(lcg_seed)
     print(f"LCG seeded with {lcg_seed}:")
     for _ in range(5):
