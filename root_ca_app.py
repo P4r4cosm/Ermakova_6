@@ -1,7 +1,7 @@
 # START OF FILE: root_ca_app.py
 
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog, scrolledtext
 import logging
 import datetime # Для работы с датами в сертификатах
 import json
@@ -35,6 +35,30 @@ class RootCAApp(BaseNodeApp):
         x = (self.root.winfo_screenwidth() - width) // 2
         y = (self.root.winfo_screenheight() - height) // 2
         self.root.geometry(f"{width}x{height}+{x}+{y}")  # Устанавливаем размер и позицию окна
+
+    def load_configuration(self):
+        """Переопределяем метод для загрузки конфигурации без обновления GUI."""
+        import os
+        import json
+
+        if os.path.exists(self.config_file_path):
+            try:
+                with open(self.config_file_path, 'r') as f:
+                    config = json.load(f)
+                    
+                self.p = config.get("p")
+                self.g = config.get("g")
+                self.key_pair_signature = config.get("key_pair_signature", {"private_xs": None, "public_ys": None})
+                self.key_pair_encryption = config.get("key_pair_encryption", {"private_xe": None, "public_ye": None})
+                
+                # Загружаем собственный сертификат, если он есть
+                cert_data = config.get("own_certificate")
+                if cert_data:
+                    self.own_certificate = Certificate.from_dict(cert_data)
+                
+                logger.info(f"Конфигурация загружена из {self.config_file_path}")
+            except Exception as e:
+                logger.error(f"Ошибка при загрузке конфигурации из {self.config_file_path}: {e}")
 
     def create_rca_specific_gui(self):
         """ Добавляет специфичные для RCA элементы в GUI. """
@@ -81,6 +105,28 @@ class RootCAApp(BaseNodeApp):
         self.lca_cert_details_text = tk.Text(self.issued_lca_certs_tab, wrap=tk.WORD, height=10, width=60, state=tk.DISABLED)
         self.lca_cert_details_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
+        # После создания всех элементов GUI обновляем отображение
+        self.update_key_displays()
+
+    def update_key_displays(self):
+        """Переопределяем метод для отображения только ключей подписи в RCA."""
+        # Обновляем отображение глобальных параметров
+        self.p_display.config(text=str(self.p) if self.p else "Не задано")
+        self.g_display.config(text=str(self.g) if self.g else "Не задано")
+        
+        # Отображаем только ключи подписи
+        self.ys_display.config(text=str(self.key_pair_signature.get('public_ys')) if self.key_pair_signature.get('public_ys') else "Не задано")
+        # Скрываем или очищаем ye, так как он не используется в RCA
+        self.ye_display.config(text="Не используется")
+
+        # Обновляем отображение сертификата
+        self.own_cert_text.config(state=tk.NORMAL)
+        self.own_cert_text.delete(1.0, tk.END)
+        if self.own_certificate:
+            self.own_cert_text.insert(tk.END, json.dumps(self.own_certificate.to_dict(), indent=2, ensure_ascii=False))
+        else:
+            self.own_cert_text.insert(tk.END, "Сертификат отсутствует.")
+        self.own_cert_text.config(state=tk.DISABLED)
 
     def generate_pg_action(self):
         if self.p or self.g:
@@ -123,11 +169,11 @@ class RootCAApp(BaseNodeApp):
                 return
         try:
             # Генерация ключей для подписи (xs, ys)
-            # RCA также может иметь ключи для шифрования (xe, ye), но для выдачи сертификатов нужны ключи подписи.
-            # Для простоты, предположим, что ye = ys для RCA.
             priv_xs, pub_ys = ElGamalCrypto.generate_keys(self.p, self.g, self.get_next_lcg_seed())
             self.key_pair_signature = {"private_xs": priv_xs, "public_ys": pub_ys}
-            self.key_pair_encryption = {"private_xe": priv_xs, "public_ye": pub_ys} # Используем те же для RCA
+            
+            # RCA не нуждается в ключах шифрования
+            self.key_pair_encryption = {"private_xe": None, "public_ye": None}
 
             logger.info(f"Сгенерированы ключи RCA: public_ys={pub_ys}")
 
@@ -135,7 +181,6 @@ class RootCAApp(BaseNodeApp):
             self.own_certificate = Certificate(
                 subject_id=self.node_id,
                 issuer_id=self.node_id, # Сам себе издатель
-                subject_public_key_ye=self.key_pair_encryption["public_ye"],
                 subject_public_key_ys=self.key_pair_signature["public_ys"],
                 p=self.p,
                 g=self.g,
@@ -320,6 +365,32 @@ class RootCAApp(BaseNodeApp):
             # Если команда не распознана, вызываем метод базового класса
             return super().process_command(command, payload, addr)
 
+    def create_keys_certs_tab_widgets(self, parent_tab):
+        """ Создает виджеты для вкладки 'Ключи и Сертификат' без отображения ключей шифрования. """
+        frame = ttk.Frame(parent_tab, padding="5")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="Параметр p:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        self.p_display = ttk.Label(frame, text="N/A")
+        self.p_display.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame, text="Параметр g:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        self.g_display = ttk.Label(frame, text="N/A")
+        self.g_display.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        # Создаем ye_display, но не отображаем его (он нужен для совместимости с базовым классом)
+        self.ye_display = ttk.Label(frame, text="N/A")
+        
+        ttk.Label(frame, text="Открытый ключ подписи (ys):").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        self.ys_display = ttk.Label(frame, text="N/A")
+        self.ys_display.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame, text="Собственный сертификат:").grid(row=3, column=0, sticky=tk.NW, padx=5, pady=2)
+        self.own_cert_text = scrolledtext.ScrolledText(frame, wrap=tk.WORD, height=8, width=60, state=tk.DISABLED)
+        self.own_cert_text.grid(row=3, column=1, sticky=tk.NSEW, padx=5, pady=2)
+        
+        frame.columnconfigure(1, weight=1)
+        frame.rowconfigure(3, weight=1)
 
 if __name__ == "__main__":
     root_tk = tk.Tk()

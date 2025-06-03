@@ -6,8 +6,9 @@ from elgamal_utils import ElGamalCrypto, MessageUtils, LCG, PrimeManager  # Пр
 
 class Certificate:
     def __init__(self, subject_id, issuer_id,
-                 subject_public_key_ye, subject_public_key_ys,
+                 subject_public_key_ys,
                  p, g,
+                 subject_public_key_ye=None,  # Делаем ye опциональным
                  valid_from_dt=None, valid_to_dt=None,
                  serial_number=None,
                  signature_r=None, signature_s=None):
@@ -17,10 +18,10 @@ class Certificate:
         Args:
             subject_id (str): Идентификатор владельца сертификата.
             issuer_id (str): Идентификатор УЦ, выдавшего сертификат.
-            subject_public_key_ye (int): Публичный ключ владельца для шифрования (y_e).
             subject_public_key_ys (int): Публичный ключ владельца для проверки подписи (y_s).
             p (int): Простое число p Эль-Гамаля.
             g (int): Генератор g Эль-Гамаля.
+            subject_public_key_ye (int, optional): Публичный ключ владельца для шифрования (y_e).
             valid_from_dt (datetime.datetime, optional): Дата начала действия. По умолчанию - сейчас.
             valid_to_dt (datetime.datetime, optional): Дата окончания действия. По умолчанию - через 1 год.
             serial_number (int, optional): Серийный номер. Генерируется, если None.
@@ -29,8 +30,8 @@ class Certificate:
         """
         self.subject_id = str(subject_id)
         self.issuer_id = str(issuer_id)
-        self.subject_public_key_ye = int(subject_public_key_ye)
         self.subject_public_key_ys = int(subject_public_key_ys)
+        self.subject_public_key_ye = int(subject_public_key_ye) if subject_public_key_ye is not None else None
         self.p = int(p)
         self.g = int(g)
 
@@ -40,10 +41,9 @@ class Certificate:
 
         if serial_number is None:
             # Используем LCG для генерации псевдо-уникального серийного номера
-            # Сид должен быть достаточно случайным, например, на основе времени или другого источника
             lcg_seed = int(now.timestamp() * 1000) + len(subject_id)
             lcg = LCG(lcg_seed)
-            self.serial_number = lcg.randint(10**9, 10**10 -1) # Большое случайное число
+            self.serial_number = lcg.randint(10**9, 10**10 -1)
         else:
             self.serial_number = int(serial_number)
 
@@ -59,7 +59,6 @@ class Certificate:
         data = {
             "subject_id": self.subject_id,
             "issuer_id": self.issuer_id,
-            "subject_public_key_ye": self.subject_public_key_ye,
             "subject_public_key_ys": self.subject_public_key_ys,
             "p": self.p,
             "g": self.g,
@@ -67,6 +66,10 @@ class Certificate:
             "valid_to": self.valid_to,
             "serial_number": self.serial_number
         }
+        # Добавляем ye только если он есть
+        if self.subject_public_key_ye is not None:
+            data["subject_public_key_ye"] = self.subject_public_key_ye
+            
         # Сериализуем в JSON со строгой сортировкой ключей для консистентности
         return json.dumps(data, sort_keys=True, ensure_ascii=False)
 
@@ -121,10 +124,9 @@ class Certificate:
 
     def to_dict(self):
         """ Представляет сертификат в виде словаря для сериализации (например, в JSON). """
-        return {
+        data = {
             "subject_id": self.subject_id,
             "issuer_id": self.issuer_id,
-            "subject_public_key_ye": self.subject_public_key_ye,
             "subject_public_key_ys": self.subject_public_key_ys,
             "p": self.p,
             "g": self.g,
@@ -134,53 +136,31 @@ class Certificate:
             "signature_r": self.signature_r,
             "signature_s": self.signature_s
         }
+        # Добавляем ye только если он есть
+        if self.subject_public_key_ye is not None:
+            data["subject_public_key_ye"] = self.subject_public_key_ye
+        return data
 
     @classmethod
     def from_dict(cls, cert_data):
         """ Создает объект Certificate из словаря. """
         try:
-            # Преобразование строковых дат обратно в datetime объекты для конструктора
-            # Но конструктор ожидает datetime, а хранит строки. Поэтому передаем как есть.
-            # Конструктор сам разберется или мы можем передать строки напрямую
             return cls(
                 subject_id=cert_data["subject_id"],
                 issuer_id=cert_data["issuer_id"],
-                subject_public_key_ye=cert_data["subject_public_key_ye"],
                 subject_public_key_ys=cert_data["subject_public_key_ys"],
+                subject_public_key_ye=cert_data.get("subject_public_key_ye"),  # Используем .get() для опционального поля
                 p=cert_data["p"],
                 g=cert_data["g"],
-                # Для valid_from и valid_to, конструктор ожидает datetime или None.
-                # Если мы загружаем из dict, там уже строки.
-                # Проще модифицировать конструктор, чтобы он принимал строки или datetime
-                # Или здесь парсить строки в datetime перед передачей в конструктор.
-                # Текущий конструктор ожидает datetime для этих полей если они не None.
-                # А to_dict сохраняет строки. Это несоответствие.
-                # Исправим: from_dict будет передавать строки, а __init__ будет их хранить.
-                # valid_from_dt и valid_to_dt в конструкторе теперь опциональны
-                # и если None, то используются now/now+1year.
-                # Если from_dict передает строки из сохраненного сертификата,
-                # нужно их корректно обработать.
-                # Самый простой путь: __init__ напрямую сохраняет строки, если они переданы.
-                # Для этого нужно будет немного изменить __init__.
-                # Пока оставим как есть, конструктор будет форматировать их заново, что не идеально.
-                # Лучше: передавать None для дат, если они уже в cert_data,
-                # и затем напрямую присваивать их после создания объекта.
-                #
-                # Обновление: конструктор теперь обрабатывает строки, если они переданы как valid_from/valid_to.
-                # Но для единообразия, from_dict просто передаст их как есть.
-                # Атрибуты valid_from/to будут строками.
-                #
-                # Еще лучше: конструктор принимает строки, и сразу их использует.
-                # Передадим строки напрямую из cert_data
                 valid_from_dt=datetime.datetime.strptime(cert_data["valid_from"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc),
                 valid_to_dt=datetime.datetime.strptime(cert_data["valid_to"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc),
                 serial_number=cert_data["serial_number"],
-                signature_r=cert_data.get("signature_r"), # .get для опциональных полей
+                signature_r=cert_data.get("signature_r"),
                 signature_s=cert_data.get("signature_s")
             )
         except KeyError as e:
             raise ValueError(f"Missing key in certificate data: {e}")
-        except ValueError as e: # Ошибки парсинга дат или int
+        except ValueError as e:
             raise ValueError(f"Error parsing certificate data: {e}")
 
 
@@ -283,7 +263,6 @@ if __name__ == "__main__":
     client_cert = Certificate(
         subject_id="client1@example.com",
         issuer_id="RootCA",
-        subject_public_key_ye=client_pub_key_ye,
         subject_public_key_ys=client_pub_key_ys,
         p=test_p,
         g=test_g
@@ -320,7 +299,6 @@ if __name__ == "__main__":
     root_ca_cert = Certificate(
         subject_id="RootCA",
         issuer_id="RootCA", # Сам себе издатель
-        subject_public_key_ye=ca_pub_key_ye, # Публичный ключ УЦ для шифрования
         subject_public_key_ys=ca_pub_key_ys, # Публичный ключ УЦ для подписи
         p=test_p,
         g=test_g
