@@ -9,7 +9,7 @@ import os
 import socket
 
 from base_node_app import BaseNodeApp
-from elgamal_utils import ElGamalCrypto, PrimeManager # LCG, PrimeManager уже в BaseNodeApp
+from elgamal_utils import ElGamalCrypto, PrimeManager, LCG # LCG, PrimeManager уже в BaseNodeApp
 from certificate_manager import Certificate # CertificateStore уже в BaseNodeApp
 from network_utils import connect_to_server, send_json_message, receive_json_message, \
                           ConnectionClosedError, MessageFormatError, NetworkError
@@ -26,7 +26,7 @@ class LocalCAApp(BaseNodeApp):
 
         # 2. Вызов super().__init__()
         # Он вызовет BaseNodeApp.setup_gui() и LocalCAApp.load_configuration() (переопределенный)
-        super().__init__(root, node_id, default_port, config_file_name="lca_config.json")
+        super().__init__(root, node_id, default_port, config_file_name=f"lca_{node_id}_config.json")
         self.root.title(f"Локальный УЦ (LCA): {self.node_id}")
 
         # 3. Создание специфичных для LCA GUI элементов
@@ -50,28 +50,56 @@ class LocalCAApp(BaseNodeApp):
         elif not self.p or not self.g:
              logger.warning(f"LCA '{self.node_id}' не имеет параметров p и g. Получите их от RCA (через запрос сертификата).")
 
+        logger.info(f"Локальный УЦ '{self.node_id}' инициализирован.")
+
+        # 7. Настраиваем начальный размер окна
+        self.root.update_idletasks()  # Обновляем информацию о размерах виджетов
+        width = max(800, self.root.winfo_reqwidth())  # Минимум 800 или требуемая ширина
+        height = max(600, self.root.winfo_reqheight())  # Минимум 600 или требуемая высота
+        x = (self.root.winfo_screenwidth() - width) // 2
+        y = (self.root.winfo_screenheight() - height) // 2
+        self.root.geometry(f"{width}x{height}+{x}+{y}")  # Устанавливаем размер и позицию окна
 
     def create_lca_specific_gui(self):
         """ Добавляет специфичные для LCA элементы в GUI. """
-        lca_panel = ttk.Labelframe(self.control_panel, text="Действия LCA")
-        lca_panel.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=5)
+        # Панель для параметров подключения к RCA
+        rca_conn_panel = ttk.Labelframe(self.control_panel, text="Параметры подключения к RCA")
+        rca_conn_panel.pack(side=tk.TOP, fill=tk.X, expand=True, padx=10, pady=5)
 
-        ttk.Button(lca_panel, text="0. Получить параметры от RCA", command=self.fetch_rca_params_action).pack(side=tk.LEFT, padx=5) # НОВАЯ КНОПКА
-        ttk.Button(lca_panel, text="1. Сгенерировать ключи LCA", command=self.generate_lca_keys_action).pack(side=tk.LEFT, padx=5)
-        
-        rca_conn_frame = ttk.Frame(lca_panel)
-        rca_conn_frame.pack(side=tk.LEFT, padx=10)
-        ttk.Label(rca_conn_frame, text="RCA IP:").grid(row=0, column=0, sticky=tk.W)
-        self.rca_ip_entry = ttk.Entry(rca_conn_frame, width=15)
-        self.rca_ip_entry.grid(row=0, column=1, sticky=tk.W)
+        ttk.Label(rca_conn_panel, text="IP RCA:").pack(side=tk.LEFT, padx=5)
+        self.rca_ip_entry = ttk.Entry(rca_conn_panel, width=15)
+        self.rca_ip_entry.pack(side=tk.LEFT, padx=5)
         self.rca_ip_entry.insert(0, self.rca_host)
-        ttk.Label(rca_conn_frame, text="RCA Port:").grid(row=1, column=0, sticky=tk.W)
-        self.rca_port_entry = ttk.Entry(rca_conn_frame, width=7)
-        self.rca_port_entry.grid(row=1, column=1, sticky=tk.W)
+
+        ttk.Label(rca_conn_panel, text="Порт RCA:").pack(side=tk.LEFT, padx=5)
+        self.rca_port_entry = ttk.Entry(rca_conn_panel, width=6)
+        self.rca_port_entry.pack(side=tk.LEFT, padx=5)
         self.rca_port_entry.insert(0, str(self.rca_port))
 
-        ttk.Button(lca_panel, text="2. Запросить сертификат LCA у RCA", command=self.request_lca_certificate_from_rca_action).pack(side=tk.LEFT, padx=5) # Переименовал для ясности
-        ttk.Button(lca_panel, text="Просмотреть выданные сертификаты клиентов", command=self.view_issued_client_certs_action).pack(side=tk.LEFT, padx=5)
+        # Панель для действий LCA
+        lca_panel = ttk.Labelframe(self.control_panel, text="Действия LCA")
+        lca_panel.pack(side=tk.TOP, fill=tk.X, expand=True, padx=10, pady=5)
+
+        # Создаем фрейм для кнопок внутри панели
+        buttons_frame = ttk.Frame(lca_panel)
+        buttons_frame.pack(padx=5, pady=5)
+
+        # Список всех кнопок и их команд
+        buttons = [
+            ("0. Получить параметры от RCA", self.fetch_rca_params_action),
+            ("Проверить P на простоту", self.test_prime_p_action),
+            ("1. Сгенерировать ключи LCA", self.generate_lca_keys_action),
+            ("2. Запросить сертификат LCA у RCA", self.request_lca_certificate_from_rca_action),
+            ("Просмотреть выданные сертификаты клиентов", self.view_issued_client_certs_action)
+        ]
+
+        # Размещаем кнопки в сетке по 3 в ряд
+        for i, (text, command) in enumerate(buttons):
+            row = i // 3  # Целочисленное деление для определения строки
+            col = i % 3   # Остаток от деления для определения столбца
+            ttk.Button(buttons_frame, text=text, command=command).grid(
+                row=row, column=col, padx=5, pady=5, sticky="ew"
+            )
 
         # Вкладка для отображения выданных сертификатов клиентов
         self.issued_client_certs_tab = ttk.Frame(self.notebook)
@@ -88,6 +116,7 @@ class LocalCAApp(BaseNodeApp):
 
         self.client_cert_details_text = tk.Text(self.issued_client_certs_tab, wrap=tk.WORD, height=10, width=60, state=tk.DISABLED)
         self.client_cert_details_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
     def fetch_rca_params_action(self): # НОВЫЙ МЕТОД
         if self.p and self.g and self.rca_certificate:
             if not messagebox.askyesno("Подтверждение",
@@ -177,7 +206,8 @@ class LocalCAApp(BaseNodeApp):
             messagebox.showwarning("Параметры отсутствуют", 
                                    "Параметры p и g не установлены. Они будут получены от RCA при запросе сертификата. "
                                    "Вы можете сгенерировать ключи сейчас, но они будут основаны на временных p и g, "
-                                   "если они не будут установлены вручную или получены от RCA.", parent=self.root)
+                                   "если они не будут установлены вручную или получены от RCA. "
+                                   "Пока что разрешим, но с предупреждением. При получении серт. от RCA p,g обновятся.", parent=self.root)
             # Для генерации ключей нужны p и g. Если их нет, можно сгенерировать временные (не рекомендуется)
             # или просто запретить генерацию до получения p,g от RCA.
             # Пока что разрешим, но с предупреждением. При получении серт. от RCA p,g обновятся.
@@ -339,6 +369,38 @@ class LocalCAApp(BaseNodeApp):
             if rca_sock:
                 rca_sock.close()
 
+    def test_prime_p_action(self):
+        """Проверяет текущее значение p на простоту всеми тремя методами."""
+        if not self.p:
+            messagebox.showerror("Ошибка", "Параметр P не установлен. Сначала получите P и G от RCA.", parent=self.root)
+            return
+
+        logger.info(f"Проверка простоты числа P={self.p}:")
+        
+        # 1. Trial Division Test
+        trial_result = PrimeManager._is_prime_trial_division(self.p)
+        logger.info(f"1. Trial Division Test: {'ВЕРОЯТНО ПРОСТОЕ' if trial_result else 'СОСТАВНОЕ'}")
+        
+        # 2. Fermat Test
+        lcg = LCG(self.get_next_lcg_seed())
+        fermat_result = PrimeManager._is_prime_fermat(self.p, k=5, lcg_instance=lcg)
+        logger.info(f"2. Fermat Test (k=5): {'ВЕРОЯТНО ПРОСТОЕ' if fermat_result else 'СОСТАВНОЕ'}")
+        
+        # 3. Miller-Rabin Test
+        miller_rabin_result = PrimeManager._is_prime_miller_rabin(self.p, k=64, lcg_instance=lcg)
+        logger.info(f"3. Miller-Rabin Test (k=64): {'ВЕРОЯТНО ПРОСТОЕ' if miller_rabin_result else 'СОСТАВНОЕ'}")
+        
+        # Общий результат
+        if trial_result and fermat_result and miller_rabin_result:
+            result_message = "Число P прошло все тесты на простоту:\n\n"
+        else:
+            result_message = "Число P НЕ прошло некоторые тесты на простоту:\n\n"
+            
+        result_message += f"1. Trial Division Test: {'ВЕРОЯТНО ПРОСТОЕ' if trial_result else 'СОСТАВНОЕ'}\n"
+        result_message += f"2. Fermat Test (k=5): {'ВЕРОЯТНО ПРОСТОЕ' if fermat_result else 'СОСТАВНОЕ'}\n"
+        result_message += f"3. Miller-Rabin Test (k=64): {'ВЕРОЯТНО ПРОСТОЕ' if miller_rabin_result else 'СОСТАВНОЕ'}"
+        
+        messagebox.showinfo("Результаты проверки простоты", result_message, parent=self.root)
 
     def load_issued_client_certificates(self):
         self.issued_client_certs_listbox.delete(0, tk.END)

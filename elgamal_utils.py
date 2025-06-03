@@ -80,6 +80,54 @@ class PrimeManager: # Combining PrimeGenerator and PrimeTester
             x -=1
         return x
 
+    @staticmethod
+    def _is_prime_trial_division(n):
+        """
+        Trial division test using small primes and then odd numbers up to sqrt(n).
+        Returns True if n passes trial division test, False if composite.
+        """
+        if n < 4: return n > 1  # Handle small numbers
+        # Check small primes first
+        small_primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31]
+        for p in small_primes:
+            if n % p == 0:
+                return n == p  # Prime only if n equals the small prime
+
+        # Check odd numbers up to sqrt(n) or 1000, whichever is smaller
+        sqrt_n = PrimeManager._custom_int_sqrt(n)
+        i = 37  # Start after our small primes list
+        step = 2  # Only check odd numbers
+        limit = min(sqrt_n, 1000)  # Don't go beyond 1000 for efficiency
+        
+        while i <= limit:
+            if n % i == 0:
+                return False
+            i += step
+        return True
+
+    @staticmethod
+    def _is_prime_fermat(n, k=5, lcg_instance=None):
+        """
+        Fermat primality test.
+        n: number to test
+        k: number of rounds (iterations) for testing
+        lcg_instance: LCG instance for random number generation
+        Returns True if n passes Fermat test, False if composite
+        """
+        if n == 2: return True
+        if n < 2 or n % 2 == 0: return False
+
+        if lcg_instance is None:
+            lcg_instance = LCG(n)  # Create new LCG with n as seed if none provided
+
+        # Test k random bases
+        for _ in range(k):
+            # Choose random base a in [2, n-2]
+            a = lcg_instance.randint(2, n - 2)
+            # Check if a^(n-1) ≡ 1 (mod n)
+            if ElGamalBaseUtils.custom_pow(a, n - 1, n) != 1:
+                return False
+        return True
 
     @staticmethod
     def _is_prime_miller_rabin(n, k=64, lcg_instance=None): # k is number of rounds
@@ -122,13 +170,17 @@ class PrimeManager: # Combining PrimeGenerator and PrimeTester
     def generate_prime(bit_length, seed_for_lcg, attempts_per_candidate=1000):
         """
         Generates a prime number of approximately bit_length bits.
-        Uses LCG for randomness.
+        Uses LCG for randomness and multiple primality tests:
+        1. Trial division test
+        2. Fermat primality test
+        3. Miller-Rabin primality test
         """
         if not (64 <= bit_length <= 512): # Practical limits for demo
             raise ValueError("Bit length must be between 64 and 512 for this generator.")
 
         lcg_prime_gen = LCG(seed_for_lcg)
         lcg_miller_rabin_bases = LCG(seed_for_lcg + 1) # Separate LCG for Miller-Rabin bases
+        lcg_fermat_bases = LCG(seed_for_lcg + 2) # Separate LCG for Fermat bases
 
         min_val = 1 << (bit_length - 1)
         max_val = (1 << bit_length) - 1
@@ -137,27 +189,25 @@ class PrimeManager: # Combining PrimeGenerator and PrimeTester
             # Generate a candidate number of the correct bit length
             # Ensure it's odd
             candidate = lcg_prime_gen.randint(min_val, max_val) | 1
-            if candidate > max_val : candidate = (min_val | 1) # reset if overflow for some reason
-
-            # Pre-screening with small primes
-            small_primes = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53]
-            is_divisible_by_small_prime = False
-            for p_small in small_primes:
-                if candidate == p_small: # candidate is one of the small primes
-                    PrimeManager.generated_primes.add(candidate)
-                    return candidate
-                if candidate % p_small == 0:
-                    is_divisible_by_small_prime = True
-                    break
-            if is_divisible_by_small_prime:
-                continue
+            if candidate > max_val: candidate = (min_val | 1) # reset if overflow for some reason
 
             if candidate in PrimeManager.generated_primes: # Avoid re-testing known
                 continue
 
+            # Apply all three primality tests in order of computational cost
+            # 1. Trial division (fastest, eliminates many composites quickly)
+            if not PrimeManager._is_prime_trial_division(candidate):
+                continue
+
+            # 2. Fermat test (medium cost)
+            if not PrimeManager._is_prime_fermat(candidate, k=5, lcg_instance=lcg_fermat_bases):
+                continue
+
+            # 3. Miller-Rabin test (most rigorous)
             if PrimeManager._is_prime_miller_rabin(candidate, k=64, lcg_instance=lcg_miller_rabin_bases):
                 PrimeManager.generated_primes.add(candidate)
                 return candidate
+
         raise RuntimeError(f"Failed to generate {bit_length}-bit prime after many attempts.")
 
     @staticmethod

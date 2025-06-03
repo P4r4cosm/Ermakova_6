@@ -1,0 +1,13 @@
+{
+    "subject_id": "client2@LCA2",
+    "issuer_id": "LCA2",
+    "subject_public_key_ye": 638038658669944066,
+    "subject_public_key_ys": 6059937069730874902,
+    "p": 9223372037239625299,
+    "g": 2,
+    "valid_from": "2025-06-03T14:01:36Z",
+    "valid_to": "2026-06-03T14:01:36Z",
+    "serial_number": 2635285489,
+    "signature_r": 436030259122625774,
+    "signature_s": 1932492575740244748
+}
