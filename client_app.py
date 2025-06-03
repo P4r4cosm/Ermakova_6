@@ -291,8 +291,6 @@ class ClientApp(BaseNodeApp):
             "client_id": self.node_id,
             "client_public_key_ye": self.key_pair_encryption["public_ye"],
             "client_public_key_ys": self.key_pair_signature["public_ys"]
-            # p и g клиента теперь должны совпадать с p и g LCA,
-            # LCA будет использовать свои p и g при создании сертификата клиента.
         }
         
         lca_sock = None
@@ -314,7 +312,6 @@ class ClientApp(BaseNodeApp):
 
             if response.get("status") == "ok":
                 client_cert_data = response.get("client_certificate")
-                # LCA может снова прислать свой сертификат и RCA, обновим их на всякий случай
                 lca_cert_data_resp = response.get("lca_certificate")
                 rca_cert_data_resp = response.get("rca_certificate")
 
@@ -324,13 +321,11 @@ class ClientApp(BaseNodeApp):
                 
                 if lca_cert_data_resp:
                     try:
-                        # Проверяем, не изменился ли сертификат LCA с момента последнего получения
                         parsed_lca_cert_resp = Certificate.from_dict(lca_cert_data_resp)
                         if not self.lca_certificate or self.lca_certificate.serial_number != parsed_lca_cert_resp.serial_number:
                             logger.info("Сертификат LCA был обновлен от LCA.")
                             self.lca_certificate = parsed_lca_cert_resp
                             self.certificate_store.add_certificate(self.lca_certificate, save_to_file=True)
-                            # Если p,g LCA изменились, это большая проблема, но LCA не должен их менять просто так
                             if self.lca_certificate.p != self.p or self.lca_certificate.g != self.g:
                                 logger.error("КРИТИЧЕСКАЯ ОШИБКА: P,G в обновленном сертификате LCA не совпадают с ранее установленными!")
                                 messagebox.showerror("Ошибка параметров LCA", "P,G в сертификате LCA изменились! Система неконсистентна.",parent=self.root)
@@ -372,13 +367,19 @@ class ClientApp(BaseNodeApp):
                 else:
                     self.own_certificate = None
                     logger.error(f"Полученный от LCA сертификат клиента ({self.node_id}) не прошел проверку подписи!")
-                    # ... (дополнительные логи для отладки ошибки проверки, как были ранее) ...
                     messagebox.showerror("Ошибка проверки", "Подпись полученного сертификата недействительна!", parent=self.root)
             else:
                 error_msg = response.get("message", "Неизвестная ошибка от LCA.")
                 logger.error(f"LCA вернул ошибку: {error_msg}")
                 messagebox.showerror("Ошибка от LCA", f"LCA вернул ошибку: {error_msg}", parent=self.root)
-        # ... (except и finally) ...
+        except (NetworkError, ConnectionClosedError, MessageFormatError, socket.timeout) as e:
+            logger.error(f"Сетевая ошибка при запросе сертификата у LCA: {e}")
+            messagebox.showerror("Сетевая ошибка", f"Ошибка при обмене данными с LCA: {e}", parent=self.root)
+        except Exception as e:
+            logger.error(f"Непредвиденная ошибка при запросе сертификата у LCA: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            messagebox.showerror("Ошибка", f"Произошла ошибка: {e}", parent=self.root)
         finally:
             if lca_sock:
                 lca_sock.close()
@@ -390,16 +391,11 @@ class ClientApp(BaseNodeApp):
             
         self.known_certs_listbox.delete(0, tk.END)
         
-        # Явное добавление известных важных сертификатов, если они есть в памяти
-        # Это поможет им появиться в списке, даже если они еще не были сохранены/загружены из файла
-        # в этот конкретный экземпляр certificate_store (хотя они должны добавляться при установке)
         temp_certs_to_display = {}
         if self.own_certificate: temp_certs_to_display[self.own_certificate.subject_id] = self.own_certificate
         if self.lca_certificate: temp_certs_to_display[self.lca_certificate.subject_id] = self.lca_certificate
         if self.rca_certificate: temp_certs_to_display[self.rca_certificate.subject_id] = self.rca_certificate
 
-        # Добавляем все из хранилища, перезаписывая из temp_certs_to_display, если subject_id совпадает,
-        # чтобы гарантировать, что в списке самые актуальные объекты из памяти.
         for subject_id in self.certificate_store.list_subject_ids():
             cert_from_store = self.certificate_store.get_certificate(subject_id)
             if cert_from_store:
@@ -427,7 +423,6 @@ class ClientApp(BaseNodeApp):
         except tk.TclError:
             return
 
-        # Ищем сертификат сначала среди основных (own, lca, rca), потом в хранилище
         cert_to_display = None
         if self.own_certificate and self.own_certificate.subject_id == selected_subject_id:
             cert_to_display = self.own_certificate
@@ -450,7 +445,7 @@ class ClientApp(BaseNodeApp):
             if self.lca_certificate and cert_to_display.subject_id == self.lca_certificate.subject_id: is_other_party_cert = False
             if self.rca_certificate and cert_to_display.subject_id == self.rca_certificate.subject_id: is_other_party_cert = False
             
-            if is_other_party_cert: # Проверяем только "чужие" сертификаты
+            if is_other_party_cert:
                 self.known_cert_details_text.insert(tk.END, "\n\n--- Проверка цепочки доверия ---\n")
                 is_trusted, chain = self.verify_certificate_chain(cert_to_display)
                 if is_trusted:
@@ -477,14 +472,14 @@ class ClientApp(BaseNodeApp):
 
         chain = []
         current_cert_obj = target_cert
-        visited_subjects_in_chain = set() # Для предотвращения циклов
+        visited_subjects_in_chain = set() 
 
         max_depth = 10
         current_depth = 0
 
         while current_depth < max_depth:
             current_depth += 1
-            if not current_cert_obj: # Добавлено для защиты
+            if not current_cert_obj: 
                 logger.error("Ошибка в verify_certificate_chain: current_cert_obj стал None.")
                 return False, chain
 
@@ -499,29 +494,26 @@ class ClientApp(BaseNodeApp):
                 logger.warning(f"Сертификат {current_cert_obj.subject_id} в цепочке недействителен по дате.")
                 return False, chain
             
-            # Если текущий сертификат выдан RCA
             if current_cert_obj.issuer_id == self.rca_certificate.subject_id:
-                if current_cert_obj.subject_id == self.rca_certificate.subject_id: # Это сам RCA
-                    if current_cert_obj.verify_signature(self.rca_certificate.subject_public_key_ys): # Самоподпись
+                if current_cert_obj.subject_id == self.rca_certificate.subject_id: 
+                    if current_cert_obj.verify_signature(self.rca_certificate.subject_public_key_ys): 
                         logger.info(f"Цепочка для {target_cert.subject_id} дошла до доверенного RCA и самоподпись верна.")
                         return True, chain
                     else:
                         logger.warning(f"Самоподпись сертификата RCA ({self.rca_certificate.subject_id}) неверна.")
                         return False, chain
-                else: # Сертификат выдан RCA (например, это LCA)
+                else: 
                     if current_cert_obj.verify_signature(self.rca_certificate.subject_public_key_ys):
                         logger.info(f"Сертификат {current_cert_obj.subject_id} (выдан RCA) проверен. Цепочка для {target_cert.subject_id} доверенная.")
-                        return True, chain # Достигли доверенного издателя
+                        return True, chain 
                     else:
                         logger.warning(f"Подпись сертификата {current_cert_obj.subject_id}, выданного RCA, неверна.")
                         return False, chain
             
-            # Иначе, ищем сертификат издателя в известных
-            # Сначала проверяем, не является ли издатель нашим известным LCA
             issuer_cert_obj = None
             if self.lca_certificate and current_cert_obj.issuer_id == self.lca_certificate.subject_id:
                 issuer_cert_obj = self.lca_certificate
-            else: # Иначе ищем в общем хранилище
+            else: 
                 issuer_cert_obj = self.certificate_store.get_certificate(current_cert_obj.issuer_id)
 
             if not issuer_cert_obj:
@@ -532,13 +524,153 @@ class ClientApp(BaseNodeApp):
                 logger.warning(f"Подпись сертификата '{current_cert_obj.subject_id}' издателем '{issuer_cert_obj.subject_id}' неверна.")
                 return False, chain
             
-            current_cert_obj = issuer_cert_obj # Переходим к следующему сертификату в цепочке
+            current_cert_obj = issuer_cert_obj 
         
         logger.warning(f"Цепочка для {target_cert.subject_id} не дошла до доверенного RCA за {max_depth} шагов.")
         return False, chain
     
-    # fetch_recipient_certificate_action, send_message_action, process_command - остаются как в вашем последнем варианте, но с учетом,
-    # что p,g теперь должны быть корректно установлены перед их использованием.
+    def process_command(self, command: str, payload: dict, addr) -> dict | None:
+        logger.debug(f"Клиент ({self.node_id}) process_command: command='{command}', payload='{payload is not None}' from {addr}")
+
+        if command == "receive_message":
+            try:
+                sender_id = payload.get("sender_id")
+                enc_a = int(payload["encrypted_a"])
+                enc_b = int(payload["encrypted_b"])
+                sig_r = int(payload["signature_r"])
+                sig_s = int(payload["signature_s"])
+                original_hash_h_sender = int(payload.get("original_message_hash_h_sender"))
+                sender_cert_chain_data = payload.get("sender_certificate_chain", [])
+
+                if not all([sender_id, sender_cert_chain_data]):
+                    logger.error(f"Неполное сообщение от {addr}: отсутствует sender_id или sender_certificate_chain.")
+                    return {"status": "error", "message": "Incomplete message payload (missing sender_id or chain)."}
+
+                logger.info(f"Получено зашифрованное сообщение от '{sender_id}'.")
+
+                sender_certificate = None
+                parsed_sender_certs = []
+                for cert_data in sender_cert_chain_data:
+                    try:
+                        cert = Certificate.from_dict(cert_data)
+                        self.certificate_store.add_certificate(cert, save_to_file=True)
+                        parsed_sender_certs.append(cert)
+                        if cert.subject_id == sender_id:
+                            sender_certificate = cert
+                    except Exception as e_parse_sender:
+                        logger.error(f"Ошибка парсинга сертификата из цепочки от {sender_id}: {e_parse_sender}")
+                
+                if not sender_certificate and parsed_sender_certs:
+                    logger.warning(f"Сертификат отправителя '{sender_id}' не найден по ID в цепочке, используем первый: {parsed_sender_certs[0].subject_id}")
+                    sender_certificate = parsed_sender_certs[0]
+                
+                if not sender_certificate:
+                    logger.error(f"Сертификат отправителя '{sender_id}' не найден в полученной цепочке.")
+                    return {"status": "error", "message": "Sender certificate not found in provided chain."}
+
+                is_trusted, chain_path = self.verify_certificate_chain(sender_certificate)
+                if not is_trusted:
+                    logger.warning(f"Сертификат отправителя '{sender_id}' НЕ является доверенным. Сообщение будет обработано, но с предупреждением.")
+
+                if not self.key_pair_encryption["private_xe"]:
+                    logger.error("Невозможно расшифровать: отсутствует закрытый ключ шифрования (XE).")
+                    return {"status": "error", "message": "Cannot decrypt: private key XE missing."}
+                
+                decrypted_numeric_m = ElGamalCrypto.decrypt(enc_a, enc_b, self.p, self.g, self.key_pair_encryption["private_xe"])
+                decrypted_message_text = MessageUtils.numeric_to_message(decrypted_numeric_m)
+                logger.info(f"Сообщение от '{sender_id}' расшифровано: '{decrypted_message_text[:50]}...'")
+
+                hash_h_receiver = MessageUtils.hash_message_for_elgamal(decrypted_message_text, self.p - 1)
+                
+                if original_hash_h_sender is not None and hash_h_receiver != original_hash_h_sender:
+                    logger.warning(f"Хеш, вычисленный получателем ({hash_h_receiver}), не совпадает с хешем от отправителя ({original_hash_h_sender}).")
+                
+                if not sender_certificate.subject_public_key_ys:
+                    logger.error(f"У сертификата отправителя '{sender_id}' отсутствует публичный ключ для проверки подписи (YS).")
+                    return {"status": "error", "message": "Sender certificate has no public key YS for signature verification."}
+
+                signature_valid = ElGamalCrypto.verify(hash_h_receiver, sig_r, sig_s, self.p, self.g, sender_certificate.subject_public_key_ys)
+
+                if signature_valid:
+                    logger.info(f"Подпись сообщения от '{sender_id}' действительна.")
+                    display_msg = (f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] От {sender_id} (подпись верна, доверие: {'ДА' if is_trusted else 'НЕТ'}):\n"
+                                   f"{decrypted_message_text}\n\n")
+                    
+                    def update_gui_received_message():
+                        if hasattr(self, 'received_messages_text') and self.received_messages_text.winfo_exists():
+                            self.received_messages_text.config(state=tk.NORMAL)
+                            self.received_messages_text.insert(tk.END, display_msg)
+                            self.received_messages_text.see(tk.END)
+                            self.received_messages_text.config(state=tk.DISABLED)
+                            self.load_known_certificates()
+                    
+                    if hasattr(self.root, 'tk') and self.root.winfo_exists():
+                         self.root.after(0, update_gui_received_message)
+
+                    return {"status": "ok", "message": "Message received, decrypted, and signature verified."}
+                else:
+                    logger.warning(f"Подпись сообщения от '{sender_id}' НЕдействительна!")
+                    return {"status": "error", "message": "Message signature verification failed."}
+
+            except KeyError as e:
+                logger.error(f"Неполное сообщение (receive_message) от {addr}: отсутствует {e}")
+                return {"status": "error", "message": f"Incomplete message payload, missing: {e}"}
+            except ValueError as e: 
+                logger.error(f"Ошибка обработки сообщения (receive_message) от {addr}: {e}")
+                return {"status": "error", "message": f"Error processing message: {e}"}
+            except Exception as e:
+                logger.error(f"Непредвиденная ошибка при обработке сообщения (receive_message) от {addr}: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+                return {"status": "error", "message": f"Internal server error while processing message: {e}"}
+        
+        elif command == "get_own_certificate_chain":
+            logger.info(f"Клиент ({self.node_id}) получил запрос get_own_certificate_chain от {addr}")
+            if not self.own_certificate:
+                logger.warning(f"Клиент ({self.node_id}) не может предоставить цепочку: собственный сертификат отсутствует.")
+                return {"status": "error", "message": "Own certificate not available."}
+
+            chain_to_send_data = []
+            current_cert_obj = self.own_certificate
+            visited_subjects_in_chain = set()
+            max_depth_chain_build = 5 
+            depth_count = 0
+
+            while current_cert_obj and current_cert_obj.subject_id not in visited_subjects_in_chain and depth_count < max_depth_chain_build:
+                depth_count += 1
+                chain_to_send_data.append(current_cert_obj.to_dict())
+                visited_subjects_in_chain.add(current_cert_obj.subject_id)
+
+                if current_cert_obj.issuer_id == current_cert_obj.subject_id:
+                    break 
+
+                issuer_cert_subject_id = current_cert_obj.issuer_id
+                next_cert_in_chain = None
+
+                if self.lca_certificate and issuer_cert_subject_id == self.lca_certificate.subject_id:
+                    next_cert_in_chain = self.lca_certificate
+                elif self.rca_certificate and issuer_cert_subject_id == self.rca_certificate.subject_id:
+                    next_cert_in_chain = self.rca_certificate
+                else:
+                    next_cert_in_chain = self.certificate_store.get_certificate(issuer_cert_subject_id) 
+                
+                current_cert_obj = next_cert_in_chain
+                if not current_cert_obj and issuer_cert_subject_id not in visited_subjects_in_chain : # Проверяем, что издатель не был уже добавлен (избегаем лога если это конец цепочки)
+                    logger.info(f"Не найден сертификат издателя '{issuer_cert_subject_id}' при построении цепочки для отправки.")
+            
+            if not chain_to_send_data:
+                 logger.error(f"Клиент ({self.node_id}): ошибка, цепочка для отправки пуста, хотя собственный сертификат есть.")
+                 return {"status": "error", "message": "Failed to build certificate chain."}
+
+            logger.info(f"Клиент ({self.node_id}) отправляет цепочку из {len(chain_to_send_data)} сертификатов.")
+            return {
+                "status": "ok",
+                "certificate_chain": chain_to_send_data
+            }
+        
+        else: 
+            return super().process_command(command, payload, addr)
+
 
     def load_configuration(self):
         super().load_configuration()
@@ -593,7 +725,7 @@ class ClientApp(BaseNodeApp):
             "rca_certificate": self.rca_certificate.to_dict() if self.rca_certificate else None
         }
         try:
-            os.makedirs(os.path.dirname(self.config_file_path), exist_ok=True) # Убедимся, что директория есть
+            os.makedirs(os.path.dirname(self.config_file_path), exist_ok=True) 
             with open(self.config_file_path, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=4, ensure_ascii=False)
             logger.info(f"Конфигурация Клиента сохранена в {self.config_file_path}")
@@ -641,40 +773,50 @@ class ClientApp(BaseNodeApp):
 
         sock = None
         try:
-            # 1. Шифрование сообщения
-            # Убедимся, что self.p используется для определения максимальной длины сообщения
             m_numeric = MessageUtils.message_to_numeric(message_text, self.p)
             enc_a, enc_b = ElGamalCrypto.encrypt(m_numeric, self.p, self.g,
                                                  recipient_cert.subject_public_key_ye,
                                                  self.get_next_lcg_seed())
             logger.info(f"Сообщение для '{recipient_id}' зашифровано: a={enc_a}, b={enc_b}")
 
-            # 2. Подпись сообщения (хеша)
             hash_h = MessageUtils.hash_message_for_elgamal(message_text, self.p - 1)
             sig_r, sig_s = ElGamalCrypto.sign(hash_h, self.p, self.g,
                                               self.key_pair_signature["private_xs"],
                                               self.get_next_lcg_seed())
             logger.info(f"Сообщение для '{recipient_id}' подписано: r={sig_r}, s={sig_s}")
 
-            # 3. Формирование пакета и отправка
             my_chain_to_send_data = []
             current_c = self.own_certificate
             visited_subjects_for_chain = set()
-            while current_c and current_c.subject_id not in visited_subjects_for_chain:
+            max_depth_chain_send = 5 
+            depth_count = 0
+
+            while current_c and current_c.subject_id not in visited_subjects_for_chain and depth_count < max_depth_chain_send:
+                depth_count += 1
                 my_chain_to_send_data.append(current_c.to_dict())
                 visited_subjects_for_chain.add(current_c.subject_id)
-                if current_c.subject_id == current_c.issuer_id: # Дошли до самоподписанного (RCA)
+                
+                if current_c.subject_id == current_c.issuer_id: 
                     break
-                # Ищем издателя в известных нам сертификатах
+                
                 issuer_cert_obj = None
-                if self.lca_certificate and current_c.issuer_id == self.lca_certificate.subject_id:
+                issuer_id = current_c.issuer_id # Для ясности
+                if self.lca_certificate and issuer_id == self.lca_certificate.subject_id:
                     issuer_cert_obj = self.lca_certificate
-                elif self.rca_certificate and current_c.issuer_id == self.rca_certificate.subject_id:
+                elif self.rca_certificate and issuer_id == self.rca_certificate.subject_id:
                     issuer_cert_obj = self.rca_certificate
-                else:
-                    issuer_cert_obj = self.certificate_store.get_certificate(current_c.issuer_id)
+                else: 
+                    issuer_cert_obj = self.certificate_store.get_certificate(issuer_id)
+                
                 current_c = issuer_cert_obj
+                if not current_c and issuer_id not in visited_subjects_for_chain:
+                    logger.info(f"Не удалось найти сертификат издателя '{issuer_id}' при построении цепочки для отправки.")
 
+
+            if not my_chain_to_send_data: 
+                logger.error("Ошибка: не удалось сформировать цепочку сертификатов для отправки (даже собственный не добавлен).")
+                messagebox.showerror("Ошибка", "Не удалось сформировать цепочку сертификатов для отправки.", parent=self.root)
+                return
 
             message_payload = {
                 "sender_id": self.node_id,
@@ -686,7 +828,7 @@ class ClientApp(BaseNodeApp):
                 "sender_certificate_chain": my_chain_to_send_data
             }
             
-            logger.info(f"Отправка сообщения для {recipient_id} ({recipient_ip}:{recipient_port})")
+            logger.info(f"Отправка сообщения для {recipient_id} ({recipient_ip}:{recipient_port}) с цепочкой из {len(my_chain_to_send_data)} сертификатов.")
             sock = connect_to_server(recipient_ip, recipient_port)
             if not sock:
                 messagebox.showerror("Ошибка", f"Не удалось подключиться к {recipient_id}.", parent=self.root)
@@ -718,7 +860,6 @@ class ClientApp(BaseNodeApp):
             if sock: sock.close()
 
     def fetch_recipient_certificate_action(self):
-        """ Пытается получить сертификат получателя и его цепочку. """
         if not self.p or not self.g:
             messagebox.showerror("Ошибка", "Параметры P и G не установлены. Сначала получите их от LCA (кнопка 0).", parent=self.root)
             return
@@ -736,14 +877,12 @@ class ClientApp(BaseNodeApp):
             messagebox.showerror("Ошибка", "Порт получателя должен быть числом.", parent=self.root)
             return
             
-        # 0. Проверить, есть ли уже сертификат в локальном хранилище
         recipient_cert = self.certificate_store.get_certificate(recipient_id)
         if recipient_cert:
             is_trusted, _ = self.verify_certificate_chain(recipient_cert)
             if is_trusted:
                 messagebox.showinfo("Сертификат найден", f"Сертификат для '{recipient_id}' уже есть в хранилище и он доверенный.", parent=self.root)
-                self.load_known_certificates() # Обновить GUI, чтобы выбрать его, если нужно
-                # Выбираем сертификат в списке, если он там есть
+                self.load_known_certificates() 
                 try:
                     idx = list(self.known_certs_listbox.get(0, tk.END)).index(recipient_id)
                     self.known_certs_listbox.select_clear(0, tk.END)
@@ -751,12 +890,11 @@ class ClientApp(BaseNodeApp):
                     self.known_certs_listbox.activate(idx)
                     self.on_known_cert_select(None)
                 except ValueError:
-                    pass # Не найден в списке, ничего страшного
+                    pass 
                 return
             else:
                 logger.warning(f"Найден сертификат для '{recipient_id}', но он не прошел проверку доверия. Попытка получить новый.")
         
-        # 1. Подключиться к получателю и запросить его сертификат и цепочку
         sock = None
         try:
             logger.info(f"Попытка получить сертификат от {recipient_id} ({recipient_ip}:{recipient_port})")
@@ -765,7 +903,6 @@ class ClientApp(BaseNodeApp):
                 messagebox.showerror("Ошибка", f"Не удалось подключиться к {recipient_id}.", parent=self.root)
                 return
 
-            # Команда "get_own_certificate_chain" должна быть реализована на стороне клиента/узла
             send_json_message(sock, {"command": "get_own_certificate_chain", "payload": {}})
             response = receive_json_message(sock, timeout=10.0)
 
@@ -782,30 +919,29 @@ class ClientApp(BaseNodeApp):
                         cert = Certificate.from_dict(cert_data)
                         self.certificate_store.add_certificate(cert, save_to_file=True)
                         parsed_certs.append(cert)
-                        if cert.subject_id == recipient_id: # Нашли сертификат самого получателя
+                        if cert.subject_id == recipient_id: 
                             target_recipient_cert_obj = cert
                     except Exception as e_parse:
                         logger.error(f"Ошибка парсинга сертификата из цепочки от {recipient_id}: {e_parse}")
-                        # Не прерываем весь процесс, если один из промежуточных сертификатов не распарсился,
-                        # но это плохой знак.
                 
-                if not target_recipient_cert_obj and parsed_certs: # Если по ID не нашли, но что-то есть
-                    logger.warning(f"Сертификат получателя '{recipient_id}' не найден по ID в цепочке, используем первый: {parsed_certs[0].subject_id}")
-                    target_recipient_cert_obj = parsed_certs[0] # Берем первый, надеясь, что это он
-                elif not parsed_certs: # Если ничего не распарсилось
+                if not target_recipient_cert_obj and parsed_certs: 
+                    if parsed_certs[0].subject_id == recipient_id:
+                        target_recipient_cert_obj = parsed_certs[0]
+                        logger.info(f"Сертификат получателя '{recipient_id}' взят как первый из цепочки.")
+                    else:
+                        logger.warning(f"Сертификат получателя '{recipient_id}' не найден по ID в цепочке, и первый сертификат ({parsed_certs[0].subject_id}) не совпадает.")
+                elif not parsed_certs: 
                      messagebox.showerror("Ошибка", "Не удалось распарсить сертификаты из цепочки.", parent=self.root)
                      return
 
-
                 if not target_recipient_cert_obj:
-                    messagebox.showerror("Ошибка", f"Сертификат для '{recipient_id}' не найден в полученной цепочке.", parent=self.root)
+                    messagebox.showerror("Ошибка", f"Сертификат для '{recipient_id}' не найден в полученной цепочке или не удалось его идентифицировать.", parent=self.root)
                     return
                 
-                # Проверяем цепочку для полученного сертификата получателя
                 is_trusted, _ = self.verify_certificate_chain(target_recipient_cert_obj)
                 if is_trusted:
                     messagebox.showinfo("Успех", f"Сертификат для '{target_recipient_cert_obj.subject_id}' и его цепочка получены и проверены.", parent=self.root)
-                    self.load_known_certificates() # Обновить список в GUI
+                    self.load_known_certificates() 
                 else:
                     messagebox.showwarning("Внимание", f"Цепочка сертификатов для '{target_recipient_cert_obj.subject_id}' не подтверждена!", parent=self.root)
             else:
@@ -824,8 +960,6 @@ class ClientApp(BaseNodeApp):
             if sock: sock.close()
 
 if __name__ == "__main__":
-    # Пример запуска клиента. ID должен быть в формате "имя@LCA_ID"
-    # Например, если LCA1 слушает на 10001, а RCA на 10000
     client_id_input = simpledialog.askstring("ID Клиента", "Введите ID клиента (например, client1@LCA1):", initialvalue="client1@LCA1")
     if not client_id_input:
         print("Запуск отменен.")
@@ -842,10 +976,9 @@ if __name__ == "__main__":
         print("Неверный порт. Запуск отменен.")
         exit()
 
-    # Определение порта LCA на основе ID клиента (упрощенно)
-    default_lca_port = 10001 # Порт для LCA1 по умолчанию
+    default_lca_port = 10001 
     if "@LCA2" in client_id_input:
-        default_lca_port = 10002 # Порт для LCA2 по умолчанию
+        default_lca_port = 10002 
 
     root_client = tk.Tk()
     app_client = ClientApp(root_client, 
