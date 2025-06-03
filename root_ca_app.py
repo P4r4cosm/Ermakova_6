@@ -6,7 +6,7 @@ import logging
 import datetime # Для работы с датами в сертификатах
 import json
 from base_node_app import BaseNodeApp
-from elgamal_utils import PrimeManager, ElGamalCrypto # LCG уже в BaseNodeApp
+from elgamal_utils import PrimeManager, ElGamalCrypto, LCG # LCG нужен для тестов простоты
 from certificate_manager import Certificate # CertificateStore уже в BaseNodeApp
 
 logger = logging.getLogger(__name__)
@@ -28,15 +28,42 @@ class RootCAApp(BaseNodeApp):
         if not self.key_pair_signature["private_xs"] or not self.own_certificate:
             logger.warning("Ключи RCA или самоподписанный сертификат отсутствуют. Сгенерируйте их.")
 
+        # Настраиваем начальный размер окна
+        self.root.update_idletasks()  # Обновляем информацию о размерах виджетов
+        width = max(600, self.root.winfo_reqwidth())  # Минимум 600 или требуемая ширина
+        height = max(400, self.root.winfo_reqheight())  # Минимум 400 или требуемая высота
+        x = (self.root.winfo_screenwidth() - width) // 2
+        y = (self.root.winfo_screenheight() - height) // 2
+        self.root.geometry(f"{width}x{height}+{x}+{y}")  # Устанавливаем размер и позицию окна
 
     def create_rca_specific_gui(self):
         """ Добавляет специфичные для RCA элементы в GUI. """
         rca_panel = ttk.Labelframe(self.control_panel, text="Действия RCA")
         rca_panel.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=5)
 
-        ttk.Button(rca_panel, text="1. Сгенерировать P и G", command=self.generate_pg_action).pack(side=tk.LEFT, padx=5)
-        ttk.Button(rca_panel, text="2. Сгенерировать ключи RCA и сертификат", command=self.generate_rca_keys_and_cert_action).pack(side=tk.LEFT, padx=5)
-        ttk.Button(rca_panel, text="Просмотреть выданные сертификаты LCA", command=self.view_issued_lca_certs_action).pack(side=tk.LEFT, padx=5)
+        # Создаем фрейм для кнопок внутри панели
+        buttons_frame = ttk.Frame(rca_panel)
+        buttons_frame.pack(padx=5, pady=5)
+
+        # Список всех кнопок и их команд
+        buttons = [
+            ("1. Сгенерировать P и G", self.generate_pg_action),
+            ("Проверить P на простоту", self.test_prime_p_action),
+            ("2. Сгенерировать ключи RCA и сертификат", self.generate_rca_keys_and_cert_action),
+            ("Просмотреть выданные сертификаты LCA", self.view_issued_lca_certs_action)
+        ]
+
+        # Размещаем кнопки в сетке по 2 в ряд
+        for i, (text, command) in enumerate(buttons):
+            row = i // 2  # Целочисленное деление для определения строки
+            col = i % 2   # Остаток от деления для определения столбца
+            ttk.Button(buttons_frame, text=text, command=command).grid(
+                row=row, column=col, padx=5, pady=5, sticky="ew"
+            )
+
+        # Настраиваем одинаковую ширину столбцов
+        buttons_frame.grid_columnconfigure(0, weight=1)
+        buttons_frame.grid_columnconfigure(1, weight=1)
 
         # Вкладка для отображения выданных сертификатов
         self.issued_lca_certs_tab = ttk.Frame(self.notebook)
@@ -169,6 +196,38 @@ class RootCAApp(BaseNodeApp):
             self.lca_cert_details_text.insert(tk.END, f"Сертификат для {selected_subject_id} не найден.")
         self.lca_cert_details_text.config(state=tk.DISABLED)
 
+    def test_prime_p_action(self):
+        """Проверяет текущее значение p на простоту всеми тремя методами."""
+        if not self.p:
+            messagebox.showerror("Ошибка", "Параметр P не установлен. Сначала сгенерируйте P и G.", parent=self.root)
+            return
+
+        logger.info(f"Проверка простоты числа P={self.p}:")
+        
+        # 1. Trial Division Test
+        trial_result = PrimeManager._is_prime_trial_division(self.p)
+        logger.info(f"1. Trial Division Test: {'ВЕРОЯТНО ПРОСТОЕ' if trial_result else 'СОСТАВНОЕ'}")
+        
+        # 2. Fermat Test
+        lcg = LCG(self.get_next_lcg_seed())
+        fermat_result = PrimeManager._is_prime_fermat(self.p, k=5, lcg_instance=lcg)
+        logger.info(f"2. Fermat Test (k=5): {'ВЕРОЯТНО ПРОСТОЕ' if fermat_result else 'СОСТАВНОЕ'}")
+        
+        # 3. Miller-Rabin Test
+        miller_rabin_result = PrimeManager._is_prime_miller_rabin(self.p, k=64, lcg_instance=lcg)
+        logger.info(f"3. Miller-Rabin Test (k=64): {'ВЕРОЯТНО ПРОСТОЕ' if miller_rabin_result else 'СОСТАВНОЕ'}")
+        
+        # Общий результат
+        if trial_result and fermat_result and miller_rabin_result:
+            result_message = "Число P прошло все тесты на простоту:\n\n"
+        else:
+            result_message = "Число P НЕ прошло некоторые тесты на простоту:\n\n"
+            
+        result_message += f"1. Trial Division Test: {'ВЕРОЯТНО ПРОСТОЕ' if trial_result else 'СОСТАВНОЕ'}\n"
+        result_message += f"2. Fermat Test (k=5): {'ВЕРОЯТНО ПРОСТОЕ' if fermat_result else 'СОСТАВНОЕ'}\n"
+        result_message += f"3. Miller-Rabin Test (k=64): {'ВЕРОЯТНО ПРОСТОЕ' if miller_rabin_result else 'СОСТАВНОЕ'}"
+        
+        messagebox.showinfo("Результаты проверки простоты", result_message, parent=self.root)
 
     def process_command(self, command: str, payload: dict, addr) -> dict | None:
         """ Обрабатывает команды, специфичные для RCA. """

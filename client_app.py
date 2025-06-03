@@ -28,14 +28,15 @@ class ClientApp(BaseNodeApp):
         self.rca_certificate = None
 
         # 2. Вызов super().__init__()
-        super().__init__(root, node_id, default_port, config_file_name="client_config.json")
+        super().__init__(root, node_id, default_port, config_file_name=f"client_{node_id}_config.json")
         self.root.title(f"Клиент: {self.node_id}")
 
         # 3. Создание специфичных для клиента GUI элементов
         self.create_client_specific_gui()
 
-        # 4. Обновление GUI полей lca_host и lca_port
-        if hasattr(self, 'lca_ip_entry'):
+        # 4. Обновление GUI полей lca_host и lca_port значениями,
+        # которые могли быть загружены из конфигурации
+        if hasattr(self, 'lca_ip_entry'): # Проверка на всякий случай
             self.lca_ip_entry.delete(0, tk.END)
             self.lca_ip_entry.insert(0, self.lca_host)
         if hasattr(self, 'lca_port_entry'):
@@ -53,28 +54,58 @@ class ClientApp(BaseNodeApp):
         elif not self.own_certificate:
              logger.warning(f"Клиент '{self.node_id}' имеет p,g и ключи, но нет собственного сертификата. Запросите у LCA (кнопка 2).")
 
+        logger.info(f"Клиент '{self.node_id}' инициализирован.")
+
+        # 7. Настраиваем начальный размер окна
+        self.root.update_idletasks()  # Обновляем информацию о размерах виджетов
+        width = max(800, self.root.winfo_reqwidth())  # Минимум 800 или требуемая ширина
+        height = max(600, self.root.winfo_reqheight())  # Минимум 600 или требуемая высота
+        x = (self.root.winfo_screenwidth() - width) // 2
+        y = (self.root.winfo_screenheight() - height) // 2
+        self.root.geometry(f"{width}x{height}+{x}+{y}")  # Устанавливаем размер и позицию окна
 
     def create_client_specific_gui(self):
+        # Панель для параметров подключения к LCA
+        lca_conn_panel = ttk.Labelframe(self.control_panel, text="Параметры подключения к LCA")
+        lca_conn_panel.pack(side=tk.TOP, fill=tk.X, expand=True, padx=10, pady=5)
+
+        ttk.Label(lca_conn_panel, text="LCA IP:").pack(side=tk.LEFT, padx=5)
+        self.lca_ip_entry = ttk.Entry(lca_conn_panel, width=15)
+        self.lca_ip_entry.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(lca_conn_panel, text="LCA Port:").pack(side=tk.LEFT, padx=5)
+        self.lca_port_entry = ttk.Entry(lca_conn_panel, width=7)
+        self.lca_port_entry.pack(side=tk.LEFT, padx=5)
+
+        # Панель для действий клиента
         client_panel = ttk.Labelframe(self.control_panel, text="Действия клиента")
-        client_panel.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=5)
+        client_panel.pack(side=tk.TOP, fill=tk.X, expand=True, padx=10, pady=5)
 
-        ttk.Button(client_panel, text="0. Получить параметры от LCA", command=self.fetch_lca_params_action_client).pack(side=tk.LEFT, padx=5)
-        ttk.Button(client_panel, text="1. Сгенерировать ключи", command=self.generate_client_keys_action).pack(side=tk.LEFT, padx=5)
-        
-        lca_conn_frame = ttk.Frame(client_panel)
-        lca_conn_frame.pack(side=tk.LEFT, padx=10)
-        ttk.Label(lca_conn_frame, text="LCA IP:").grid(row=0, column=0, sticky=tk.W)
-        self.lca_ip_entry = ttk.Entry(lca_conn_frame, width=15)
-        self.lca_ip_entry.grid(row=0, column=1, sticky=tk.W)
-        # self.lca_ip_entry.insert(0, self.lca_host) # Будет в __init__
+        # Создаем фрейм для кнопок внутри панели
+        buttons_frame = ttk.Frame(client_panel)
+        buttons_frame.pack(padx=5, pady=5)
 
-        ttk.Label(lca_conn_frame, text="LCA Port:").grid(row=1, column=0, sticky=tk.W)
-        self.lca_port_entry = ttk.Entry(lca_conn_frame, width=7)
-        self.lca_port_entry.grid(row=1, column=1, sticky=tk.W)
-        # self.lca_port_entry.insert(0, str(self.lca_port)) # Будет в __init__
+        # Список всех кнопок и их команд
+        buttons = [
+            ("0. Получить параметры от LCA", self.fetch_lca_params_action_client),
+            ("Проверить P на простоту", self.test_prime_p_action),
+            ("1. Сгенерировать ключи", self.generate_client_keys_action),
+            ("2. Запросить сертификат у LCA", self.request_my_certificate_from_lca_action)
+        ]
 
-        ttk.Button(client_panel, text="2. Запросить свой сертификат у LCA", command=self.request_my_certificate_from_lca_action).pack(side=tk.LEFT, padx=5)
+        # Размещаем кнопки в сетке по 2 в ряд
+        for i, (text, command) in enumerate(buttons):
+            row = i // 2  # Целочисленное деление для определения строки
+            col = i % 2   # Остаток от деления для определения столбца
+            ttk.Button(buttons_frame, text=text, command=command).grid(
+                row=row, column=col, padx=5, pady=5, sticky="ew"
+            )
 
+        # Настраиваем одинаковую ширину столбцов
+        buttons_frame.grid_columnconfigure(0, weight=1)
+        buttons_frame.grid_columnconfigure(1, weight=1)
+
+        # Создаем вкладки для сообщений и сертификатов
         self.messaging_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.messaging_tab, text="Обмен сообщениями")
         self.create_messaging_tab_widgets(self.messaging_tab)
@@ -958,6 +989,39 @@ class ClientApp(BaseNodeApp):
             messagebox.showerror("Ошибка", f"Произошла ошибка: {e}", parent=self.root)
         finally:
             if sock: sock.close()
+
+    def test_prime_p_action(self):
+        """Проверяет текущее значение p на простоту всеми тремя методами."""
+        if not self.p:
+            messagebox.showerror("Ошибка", "Параметр P не установлен. Сначала получите P и G от LCA.", parent=self.root)
+            return
+
+        logger.info(f"Проверка простоты числа P={self.p}:")
+        
+        # 1. Trial Division Test
+        trial_result = PrimeManager._is_prime_trial_division(self.p)
+        logger.info(f"1. Trial Division Test: {'ВЕРОЯТНО ПРОСТОЕ' if trial_result else 'СОСТАВНОЕ'}")
+        
+        # 2. Fermat Test
+        lcg = LCG(self.get_next_lcg_seed())
+        fermat_result = PrimeManager._is_prime_fermat(self.p, k=5, lcg_instance=lcg)
+        logger.info(f"2. Fermat Test (k=5): {'ВЕРОЯТНО ПРОСТОЕ' if fermat_result else 'СОСТАВНОЕ'}")
+        
+        # 3. Miller-Rabin Test
+        miller_rabin_result = PrimeManager._is_prime_miller_rabin(self.p, k=64, lcg_instance=lcg)
+        logger.info(f"3. Miller-Rabin Test (k=64): {'ВЕРОЯТНО ПРОСТОЕ' if miller_rabin_result else 'СОСТАВНОЕ'}")
+        
+        # Общий результат
+        if trial_result and fermat_result and miller_rabin_result:
+            result_message = "Число P прошло все тесты на простоту:\n\n"
+        else:
+            result_message = "Число P НЕ прошло некоторые тесты на простоту:\n\n"
+            
+        result_message += f"1. Trial Division Test: {'ВЕРОЯТНО ПРОСТОЕ' if trial_result else 'СОСТАВНОЕ'}\n"
+        result_message += f"2. Fermat Test (k=5): {'ВЕРОЯТНО ПРОСТОЕ' if fermat_result else 'СОСТАВНОЕ'}\n"
+        result_message += f"3. Miller-Rabin Test (k=64): {'ВЕРОЯТНО ПРОСТОЕ' if miller_rabin_result else 'СОСТАВНОЕ'}"
+        
+        messagebox.showinfo("Результаты проверки простоты", result_message, parent=self.root)
 
 if __name__ == "__main__":
     client_id_input = simpledialog.askstring("ID Клиента", "Введите ID клиента (например, client1@LCA1):", initialvalue="client1@LCA1")
