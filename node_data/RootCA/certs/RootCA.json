@@ -1,13 +1,12 @@
 {
     "subject_id": "RootCA",
     "issuer_id": "RootCA",
-    "subject_public_key_ye": 8210805772366880887,
-    "subject_public_key_ys": 8210805772366880887,
-    "p": 9223372037239625299,
-    "g": 2,
-    "valid_from": "2025-06-03T12:22:30Z",
-    "valid_to": "2026-06-03T12:22:30Z",
-    "serial_number": 1820058483,
-    "signature_r": 2534982623815319208,
-    "signature_s": 8397856812770668520
+    "subject_public_key_ys": 3068514760298709381,
+    "p": 9223372036990947071,
+    "g": 11,
+    "valid_from": "2025-06-03T16:56:32Z",
+    "valid_to": "2026-06-03T16:56:32Z",
+    "serial_number": 2687212561,
+    "signature_r": 4917712361467378573,
+    "signature_s": 2414071396086660016
 }
